@@ -56,6 +56,7 @@
     <section id="view-library" class="view">
       <div id="libNotice" class="notice hidden"></div>
       <div class="chips" id="shelfChips" role="tablist" aria-label="棚"></div>
+      <div id="folderHead" class="folderHead hidden"><button id="folderBack" class="btn small" type="button"><svg><use href="#i-back"/></svg>本棚</button><b id="folderName"></b></div>
       <div id="seriesGrid" class="seriesGrid"></div>
       <div id="libEmpty" class="empty hidden"></div>
     </section>
@@ -88,6 +89,7 @@
         <div class="setRow"><span>タップでページ送り</span><div class="seg" data-pref="tap"><button data-v="left" type="button">左で次へ</button><button data-v="right" type="button">右で次へ</button></div></div>
         <div class="setRow"><span>漫画の向き</span><div class="seg" data-pref="dir"><button data-v="rtl" type="button">右開き</button><button data-v="ltr" type="button">左開き</button></div></div>
         <div class="setRow"><span>見開き</span><div class="seg" data-pref="spread"><button data-v="auto" type="button">横向きで</button><button data-v="off" type="button">なし</button><button data-v="on" type="button">いつも</button></div></div>
+        <label class="setRow"><span>保存しないで読む<small>本をタップするとPCから直接開きます（保存は ↓ ボタン）。PCがオフのときは保存した本だけ</small></span><input id="prefStream" type="checkbox" class="toggle"></label>
         <label class="setRow"><span>見開きでも表紙は1枚で</span><input id="prefCoverSingle" type="checkbox" class="toggle"></label>
         <div class="setRow"><span>小説の書き方向</span><div class="seg" data-pref="wm"><button data-v="auto" type="button">本のまま</button><button data-v="vertical" type="button">縦書き</button><button data-v="horizontal" type="button">横書き</button></div></div>
         <label class="setRow"><span>小説の文字の大きさ <b id="fontSizeVal"></b></span><input id="prefFont" type="range" min="14" max="30" step="1"></label>
@@ -100,6 +102,7 @@
       <h2 class="h">この端末の保存領域</h2>
       <div class="card">
         <div id="storageDetail" class="muted small"></div>
+        <div id="nativeStorage" class="muted small hidden"></div>
         <div class="row wrap">
           <button id="persistBtn" class="btn" type="button">消されにくくする</button>
           <button id="installBtn" class="btn hidden" type="button">アプリにする</button>
@@ -146,7 +149,9 @@
         <div class="row wrap">
           <button id="ssSaveAll" class="btn primary small" type="button"><svg><use href="#i-down"/></svg>全部保存</button>
           <button id="ssDelAll" class="btn small" type="button"><svg><use href="#i-trash"/></svg>端末から削除</button>
+          <button id="ssFolderBtn" class="btn small" type="button">フォルダへ</button>
         </div>
+        <div id="ssFolders" class="ssFolders hidden"></div>
       </div>
       <button class="iconBtn sheetClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button>
     </div>
