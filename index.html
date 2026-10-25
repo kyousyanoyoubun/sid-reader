@@ -3,134 +3,225 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#eceef1" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#111216" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#eceef2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f1013" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="SID">
-  <title>SIDリーダー</title>
+  <meta name="apple-mobile-web-app-title" content="ℜ">
+  <title>ℜ Reader</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Barlow+Semi+Condensed:wght@500;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <header id="topbar">
-    <div class="brand"><span class="mark" aria-hidden="true">SID</span><span class="brandName">リーダー</span></div>
-    <div class="links">
-      <span id="net" class="chip" title="PCとの接続">PC …</span>
-      <span id="ghNet" class="chip hidden" title="GitHubとの同期">GitHub</span>
-    </div>
-    <button id="installBtn" class="install hidden" type="button">アプリにする</button>
-    <nav class="topnav">
-      <button data-view="library" class="navbtn active" type="button">本棚</button>
-      <button data-view="add" class="navbtn" type="button">追加</button>
-      <button data-view="settings" class="navbtn" type="button">設定</button>
-    </nav>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="gInk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--ico-a)"/><stop offset="1" style="stop-color:var(--ico-b)"/></linearGradient>
+      <linearGradient id="gSoft" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--ico-c)"/><stop offset="1" style="stop-color:var(--ico-d)"/></linearGradient>
+      <symbol id="mark" viewBox="0 -40 860 760"><path transform="translate(0 686) scale(1 -1)" fill="currentColor" d="M676 463 547 388C502 381 453 359 432 348C435 382 435 418 435 451C435 464 431 507 430 512C452 550 471 576 496 600C513 618 540 628 565 628C583 628 599 617 607 601C616 585 622 567 623 548C625 523 632 486 639 479C649 469 663 464 676 463ZM826 74V90C806 82 772 69 767 69C755 69 748 81 741 91C729 111 721 132 714 154C705 181 701 285 698 351C672 373 647 388 596 388C631 416 684 445 719 463C746 477 777 493 806 504L799 517C787 515 774 513 761 513C722 513 717 527 714 541C710 558 711 575 709 591C706 615 702 642 687 660C673 677 651 686 629 686C569 686 516 654 474 612C456 594 438 573 422 553L418 548C409 573 397 597 382 615C352 652 309 686 263 686C170 686 104 624 80 600C52 572 29 542 29 502C29 464 47 440 70 412L101 369C107 361 114 352 114 342C114 327 109 315 99 303C86 287 68 271 50 261L65 250C97 266 134 287 156 312C174 332 188 355 188 384C188 394 181 411 175 422C165 439 146 462 135 476C120 493 99 524 99 536C99 558 101 578 117 593C140 616 156 623 196 623C243 623 288 590 314 551C353 494 354 414 354 367C354 320 350 274 344 228C339 197 334 166 320 138C301 100 273 72 238 48C224 63 210 76 192 89C178 99 156 106 144 106C121 106 104 92 88 78C61 55 43 25 27 0L38 -16C56 8 80 26 111 26C132 26 170 -5 192 -27C247 19 304 74 360 119C389 163 404 206 416 257C421 279 425 302 428 324C455 332 497 343 520 343C549 343 582 329 603 308C615 296 632 277 632 179C632 150 630 121 629 90L693 -27Z"/></symbol>
+      <symbol id="i-shelf" viewBox="0 0 24 24"><rect x="13.2" y="3.6" width="5" height="16.4" rx="1.4" transform="rotate(12 15.7 11.8)" fill="url(#gSoft)"/><rect x="3" y="3" width="5" height="17" rx="1.4" fill="url(#gInk)"/><rect x="9" y="5" width="4.6" height="15" rx="1.4" fill="url(#gInk)" opacity=".82"/><rect x="2.5" y="20.2" width="19" height="1.6" rx=".8" fill="url(#gSoft)"/></symbol>
+      <symbol id="i-cont" viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="18" rx="2.4" fill="url(#gSoft)"/><path d="M10 3h8.6A2.4 2.4 0 0 1 21 5.4V21l-5.5-3.4L10 21z" fill="url(#gInk)"/></symbol>
+      <symbol id="i-req" viewBox="0 0 24 24"><path d="M3 13.5h4.6l1.6 2.7h5.6l1.6-2.7H21v4.8A2.7 2.7 0 0 1 18.3 21H5.7A2.7 2.7 0 0 1 3 18.3z" fill="url(#gInk)"/><path d="M5.2 12 7.4 4.6A2.3 2.3 0 0 1 9.6 3h4.8a2.3 2.3 0 0 1 2.2 1.6l2.2 7.4h-3.5l-1.6 2.7h-3.4L8.7 12z" fill="url(#gSoft)"/><path d="M12 5.6v5.2m-2.3-2.3L12 10.8l2.3-2.3" style="stroke:var(--ico-a)" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-set" viewBox="0 0 24 24"><rect x="3" y="5.6" width="18" height="2.6" rx="1.3" fill="url(#gSoft)"/><rect x="3" y="15.8" width="18" height="2.6" rx="1.3" fill="url(#gSoft)"/><circle cx="15.5" cy="6.9" r="3.4" fill="url(#gInk)"/><circle cx="8.5" cy="17.1" r="3.4" fill="url(#gInk)"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M13.4 10.6a3.6 3.6 0 0 0-5.1 0l-3.2 3.2a3.6 3.6 0 0 0 5.1 5.1l1.2-1.2" style="stroke:var(--ico-b)" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M10.6 13.4a3.6 3.6 0 0 0 5.1 0l3.2-3.2a3.6 3.6 0 0 0-5.1-5.1l-1.2 1.2" style="stroke:var(--ico-a)" stroke-width="2.4" fill="none" stroke-linecap="round"/></symbol>
+      <symbol id="i-paste" viewBox="0 0 24 24"><rect x="4" y="4.5" width="16" height="17" rx="2.6" fill="url(#gSoft)"/><rect x="8" y="2.6" width="8" height="4" rx="1.4" fill="url(#gInk)"/><path d="M8.5 12h7M8.5 16h4.5" style="stroke:var(--ico-a)" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2.8h7.5L19 8.3v10.5a2.4 2.4 0 0 1-2.4 2.4H6a2.4 2.4 0 0 1-2.4-2.4V5.2A2.4 2.4 0 0 1 6 2.8z" fill="url(#gSoft)"/><path d="M13.5 2.8V7a1.3 1.3 0 0 0 1.3 1.3H19z" fill="url(#gInk)"/><path d="M11.3 11.2v6m-2.6-2.6 2.6 2.6 2.6-2.6" style="stroke:var(--ico-a)" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" stroke="url(#gInk)" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M20 3.6v5.2h-5.2z" fill="url(#gInk)"/></symbol>
+      <symbol id="i-sync" viewBox="0 0 24 24"><path d="M4.5 10a7.6 7.6 0 0 1 13.4-3.2M19.5 14a7.6 7.6 0 0 1-13.4 3.2" stroke="url(#gInk)" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M19.6 3.4v4.8h-4.8zM4.4 20.6v-4.8h4.8z" fill="url(#gSoft)"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.6A8.4 8.4 0 0 1 9.4 4a8.4 8.4 0 1 0 10.6 10.6z" fill="url(#gInk)"/><circle cx="17.5" cy="5.5" r="1.4" fill="url(#gSoft)"/><circle cx="20.3" cy="9.3" r=".9" fill="url(#gSoft)"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19.5h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M10 4h4M6.5 7l.9 12.1A2 2 0 0 0 9.4 21h5.2a2 2 0 0 0 2-1.9L17.5 7" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 14 6-6 6 6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-dn" viewBox="0 0 24 24"><path d="m6 10 6 6 6-6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="backdrop" aria-hidden="true"></div>
+
+  <header id="topbar" class="topbar">
+    <div class="brand"><svg class="mark" aria-hidden="true"><use href="#mark"/></svg><span id="viewTitle">本棚</span></div>
+    <label class="search glass" id="searchBox"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="libFilter" type="search" placeholder="作品名でさがす" autocomplete="off"></label>
   </header>
 
   <main id="views">
     <section id="view-library" class="view">
-      <div id="continueBox" class="continueBox hidden">
-        <h2 class="shelfTitle">続きを読む</h2>
-        <div id="continueShelf" class="shelf"></div>
-      </div>
-      <div class="libHead">
-        <div class="seg" role="tablist">
-          <button class="tab active" data-lib="saved" type="button">この端末</button>
-          <button class="tab" data-lib="pc" type="button">PCの本</button>
-        </div>
-        <button id="libReload" class="iconBtn" type="button" title="更新" aria-label="更新">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3.5h-3.5"/></svg>
-        </button>
-      </div>
-      <div id="libToolbar" class="toolbar">
-        <input id="libFilter" type="search" placeholder="作品名でさがす">
-        <label class="chk"><input id="showKindle" type="checkbox"> Kindle版も表示</label>
-      </div>
       <div id="libNotice" class="notice hidden"></div>
-      <div id="libList" class="series-list"></div>
-      <label class="filebtn">
-        <span><b>ファイルから追加</b><small>Google ドライブや「ファイル」アプリのEPUBを、この端末に保存します</small></span>
-        <input id="importFile" type="file" accept=".epub,application/epub+zip" multiple>
-      </label>
+      <div class="chips" id="shelfChips" role="tablist" aria-label="棚"></div>
+      <div id="seriesGrid" class="seriesGrid"></div>
+      <div id="libEmpty" class="empty hidden"></div>
+    </section>
+
+    <section id="view-continue" class="view hidden">
+      <h2 class="h">続きを読む</h2>
+      <div id="contList" class="contList"></div>
+      <h2 class="h" id="savedHead">この端末に保存した本</h2>
+      <div id="savedList" class="savedList"></div>
       <div id="storageInfo" class="muted small"></div>
     </section>
 
-    <section id="view-add" class="view hidden">
-      <h2>作品を追加</h2>
-      <p class="muted">漫画の<b>一覧ページ</b>のURLを送ると、PCが新しい話をダウンロードしてEPUBにします。PCが止まっていても、GitHubにつないでいれば預けておけます。</p>
-      <textarea id="addUrl" rows="3" placeholder="https://… を貼り付け（共有された文章のままでも大丈夫）"></textarea>
-      <div class="opts">
-        <label class="chk"><input id="addDrive" type="checkbox"> Google ドライブへ</label>
-        <label class="chk"><input id="addKindle" type="checkbox"> Send to Kindleへ</label>
-      </div>
-      <div class="row"><button id="pasteBtn" class="ghost" type="button">貼り付け</button><button id="addSubmit" class="primary grow" type="button">PCへ送る</button></div>
-      <div id="addMsg" class="msg"></div>
+    <section id="view-requests" class="view hidden">
       <div id="pendingBox" class="notice hidden"></div>
-      <div class="rowHead"><h3>依頼の状況</h3><button id="reqReload" class="ghost small" type="button">更新</button></div>
-      <ul id="reqList" class="req-list"></ul>
+      <ul id="reqList" class="reqList"></ul>
+      <button id="reqAdd" class="btn primary wide" type="button">作品を追加</button>
     </section>
 
     <section id="view-settings" class="view hidden">
-      <h2>つなぐ</h2>
-      <ul class="stateList" id="connState"></ul>
-      <label class="field">PCで表示したURLを貼る（QRを読めないとき）
-        <span class="row"><input id="tokenInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://…#t=… または合言葉"><button id="tokenSave" class="primary" type="button">つなぐ</button></span>
-      </label>
-      <div id="tokenMsg" class="msg"></div>
-      <h3>読み方</h3>
-      <label class="field">ページ送り
-        <select id="prefDir"><option value="rtl">右開き（漫画）</option><option value="ltr">左開き</option></select>
-      </label>
-      <label class="field">見開き
-        <select id="prefSpread"><option value="auto">横向きのとき見開き</option><option value="off">いつも1ページ</option><option value="on">いつも見開き</option></select>
-      </label>
-      <label class="chk block"><input id="prefCoverSingle" type="checkbox" checked> 見開きでも1ページ目（表紙）は1枚で表示</label>
-      <label class="chk block"><input id="prefSync" type="checkbox" checked> 読んだ位置をほかの端末と同期（PC・GitHub）</label>
-      <h3>この端末の保存領域</h3>
-      <div id="storageDetail" class="muted small"></div>
-      <div class="row wrap">
-        <button id="persistBtn" class="ghost" type="button">消されにくくする</button>
-        <button id="clearAll" class="danger" type="button">この端末の本をすべて削除</button>
+      <h2 class="h">つながり</h2>
+      <ul id="connState" class="card list"></ul>
+      <div class="card">
+        <label class="field">PCで表示したURLを貼る（QRを読めないとき）
+          <span class="row"><input id="tokenInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://…#t=…"><button id="tokenSave" class="btn primary" type="button">つなぐ</button></span>
+        </label>
+        <div id="tokenMsg" class="msg"></div>
       </div>
-      <p class="muted small">iPadはSafariとホーム画面のアプリで保存場所が別です。オフラインで読む本は、ホーム画面から開いたアプリで保存してください。</p>
-      <p id="appVersion" class="muted small"></p>
+      <h2 class="h">読み方</h2>
+      <div class="card">
+        <div class="setRow"><span>タップでページ送り</span><div class="seg" data-pref="tap"><button data-v="left" type="button">左で次へ</button><button data-v="right" type="button">右で次へ</button></div></div>
+        <div class="setRow"><span>漫画の向き</span><div class="seg" data-pref="dir"><button data-v="rtl" type="button">右開き</button><button data-v="ltr" type="button">左開き</button></div></div>
+        <div class="setRow"><span>見開き</span><div class="seg" data-pref="spread"><button data-v="auto" type="button">横向きで</button><button data-v="off" type="button">なし</button><button data-v="on" type="button">いつも</button></div></div>
+        <label class="setRow"><span>見開きでも表紙は1枚で</span><input id="prefCoverSingle" type="checkbox" class="toggle"></label>
+        <div class="setRow"><span>小説の書き方向</span><div class="seg" data-pref="wm"><button data-v="auto" type="button">本のまま</button><button data-v="vertical" type="button">縦書き</button><button data-v="horizontal" type="button">横書き</button></div></div>
+        <label class="setRow"><span>小説の文字の大きさ <b id="fontSizeVal"></b></span><input id="prefFont" type="range" min="14" max="30" step="1"></label>
+      </div>
+      <h2 class="h">表示と同期</h2>
+      <div class="card">
+        <div class="setRow"><span>テーマ</span><div class="seg" data-pref="theme"><button data-v="auto" type="button">自動</button><button data-v="light" type="button">ライト</button><button data-v="dark" type="button">ダーク</button></div></div>
+        <label class="setRow"><span>読んだ位置をほかの端末と同期<small>GitHub（PCを通さない）と、つながっていればPC</small></span><input id="prefSync" type="checkbox" class="toggle"></label>
+      </div>
+      <h2 class="h">この端末の保存領域</h2>
+      <div class="card">
+        <div id="storageDetail" class="muted small"></div>
+        <div class="row wrap">
+          <button id="persistBtn" class="btn" type="button">消されにくくする</button>
+          <button id="installBtn" class="btn hidden" type="button">アプリにする</button>
+          <button id="clearAll" class="btn danger" type="button">この端末の本をすべて削除</button>
+        </div>
+        <p class="muted small">削除しても、PC（D:\epub）のファイルは消えません。iPadはSafariとホーム画面のアプリで保存場所が別です。</p>
+      </div>
+      <p id="appVersion" class="muted small center"></p>
     </section>
   </main>
 
-  <nav class="bottomnav" aria-label="画面">
-    <button data-view="library" class="navbtn active" type="button"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 5l3.7 1-3.9 14.4-3.7-1z"/></svg><span>本棚</span></button>
-    <button data-view="add" class="navbtn" type="button"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg><span>追加</span></button>
-    <button data-view="settings" class="navbtn" type="button"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>設定</span></button>
+  <nav id="dock" class="dock" aria-label="画面">
+    <div class="pill glass" id="pill">
+      <span class="pillInd" id="pillInd" aria-hidden="true"></span>
+      <button class="tab" data-view="library" type="button" aria-label="本棚" title="本棚"><svg><use href="#i-shelf"/></svg></button>
+      <button class="tab" data-view="continue" type="button" aria-label="続き" title="続き"><svg><use href="#i-cont"/></svg></button>
+      <button class="tab" data-view="requests" type="button" aria-label="依頼" title="依頼"><svg><use href="#i-req"/></svg><i class="dot hidden" id="reqDot"></i></button>
+      <button class="tab" data-view="settings" type="button" aria-label="設定" title="設定"><svg><use href="#i-set"/></svg><i class="dot warn hidden" id="setDot"></i></button>
+    </div>
+    <div class="fabWrap">
+      <div id="fabMenu" class="fabMenu glass" aria-hidden="true">
+        <button data-act="add" type="button"><svg><use href="#i-link"/></svg><span>URLで追加</span></button>
+        <button data-act="paste" type="button"><svg><use href="#i-paste"/></svg><span>貼り付け</span></button>
+        <button data-act="file" type="button"><svg><use href="#i-file"/></svg><span>ファイル</span></button>
+        <button data-act="reload" type="button"><svg><use href="#i-refresh"/></svg><span>一覧を更新</span></button>
+        <button data-act="sync" type="button"><svg><use href="#i-sync"/></svg><span>今すぐ同期</span></button>
+        <button data-act="theme" type="button"><svg><use href="#i-moon"/></svg><span>ダーク</span></button>
+      </div>
+      <button id="fab" class="fab glass" type="button" aria-label="メニュー" aria-expanded="false"><span class="plus" aria-hidden="true"></span></button>
+    </div>
   </nav>
+  <input id="importFile" type="file" accept=".epub,application/epub+zip" multiple hidden>
 
-  <div id="reader" class="hidden" aria-hidden="true">
-    <div id="stage">
+  <!-- 作品の詳細 / 追加（下から出るシート） -->
+  <div id="scrim" class="scrim hidden"></div>
+  <section id="seriesSheet" class="sheet glass hidden" aria-modal="true" role="dialog" aria-labelledby="ssTitle">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="ssHead">
+      <div class="ssCover" id="ssCover"></div>
+      <div class="ssInfo">
+        <div class="ssShelf" id="ssShelf"></div>
+        <h3 id="ssTitle"></h3>
+        <div class="muted small" id="ssMeta"></div>
+        <div class="row wrap">
+          <button id="ssSaveAll" class="btn primary small" type="button"><svg><use href="#i-down"/></svg>全部保存</button>
+          <button id="ssDelAll" class="btn small" type="button"><svg><use href="#i-trash"/></svg>端末から削除</button>
+        </div>
+      </div>
+      <button class="iconBtn sheetClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <ul id="ssList" class="volList"></ul>
+  </section>
+
+  <section id="addSheet" class="sheet glass hidden" aria-modal="true" role="dialog" aria-labelledby="addTitle">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheetHead"><h3 id="addTitle">作品を追加</h3><button class="iconBtn sheetClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <div class="addBody">
+      <div class="field">一覧ページのURL
+        <div class="row"><textarea id="addUrl" rows="2" placeholder="https://…（共有された文章のままでも大丈夫）"></textarea></div>
+        <div class="row"><button id="pasteBtn" class="btn small" type="button"><svg><use href="#i-paste"/></svg>貼り付け</button><span class="grow"></span><span id="addConn" class="muted small"></span></div>
+      </div>
+      <div class="field">取り込み方
+        <div class="seg wide" id="modeSeg">
+          <button data-v="list" type="button" class="on">一覧→各話</button>
+          <button data-v="page" type="button" disabled>ページの画像<em>準備中</em></button>
+          <button data-v="deep" type="button" disabled>話→読み込む<em>準備中</em></button>
+        </div>
+        <div class="muted small" id="modeHint">一覧ページに各話へのリンクが並んでいるサイト。</div>
+      </div>
+      <div class="field">送り先
+        <div class="row wrap">
+          <label class="chip check"><input id="addKindle" type="checkbox"><span>Send to Kindle</span></label>
+          <label class="chip check"><input id="addDrive" type="checkbox"><span>Google ドライブ</span></label>
+        </div>
+      </div>
+      <div id="pickBox" class="pickBox hidden">
+        <div class="pickHead">
+          <input id="pickTitle" type="text" class="titleInput" aria-label="作品名">
+          <div class="pickStats" id="pickStats"></div>
+          <div class="row wrap">
+            <button class="btn small" data-sel="new" type="button">新しい話だけ</button>
+            <button class="btn small" data-sel="all" type="button">全部</button>
+            <button class="btn small" data-sel="none" type="button">なし</button>
+          </div>
+        </div>
+        <ol id="pickList" class="pickList"></ol>
+      </div>
+      <div id="addMsg" class="msg"></div>
+    </div>
+    <div class="sheetFoot">
+      <button id="previewBtn" class="btn" type="button">話を選ぶ</button>
+      <button id="addSubmit" class="btn primary grow" type="button">PCへ送る</button>
+    </div>
+  </section>
+
+  <div id="reader" class="reader hidden" aria-hidden="true">
+    <div id="stage" class="stage">
       <img id="pgA" alt="" draggable="false">
       <img id="pgB" alt="" draggable="false">
     </div>
-    <div id="rLoading" class="r-loading hidden">読み込み中…</div>
-    <div id="rTop" class="r-bar r-top hidden">
-      <button id="rBack" class="rbtn" type="button">本棚</button>
-      <div id="rTitle" class="r-title"></div>
-      <div id="rPage" class="r-page"></div>
+    <iframe id="textFrame" class="textFrame hidden" title="本文" sandbox="allow-same-origin"></iframe>
+    <div id="tapLayer" class="tapLayer"></div>
+    <div id="rLoading" class="rLoading hidden"><span class="spin"></span></div>
+    <div id="rTop" class="rbar rTop glass hidden">
+      <button id="rBack" class="iconBtn" type="button" aria-label="本棚へ"><svg><use href="#i-back"/></svg></button>
+      <div class="rTitle" id="rTitle"></div>
+      <div class="rPage" id="rPage"></div>
     </div>
-    <div id="rBottom" class="r-bar r-bottom hidden">
+    <div id="rBottom" class="rbar rBottom glass hidden">
       <input id="rSlider" type="range" min="1" max="1" value="1" aria-label="ページ">
-      <div class="row">
-        <button id="rSpread" class="rbtn" type="button">見開き: 自動</button>
-        <button id="rDir" class="rbtn" type="button">右開き</button>
-        <button id="rFull" class="rbtn" type="button">全画面</button>
+      <div class="row center wrap">
+        <button id="rSpread" class="btn small" type="button">見開き</button>
+        <button id="rDir" class="btn small" type="button">右開き</button>
+        <button id="rWm" class="btn small hidden" type="button">縦書き</button>
+        <button id="rFontDn" class="btn small hidden" type="button">A−</button>
+        <button id="rFontUp" class="btn small hidden" type="button">A＋</button>
+        <button id="rFull" class="btn small" type="button">全画面</button>
       </div>
     </div>
   </div>
 
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>
 </html>
