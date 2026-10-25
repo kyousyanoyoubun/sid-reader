@@ -1,7 +1,7 @@
-// SIDリーダー Service Worker: アプリ本体をキャッシュして、PCがオフでも起動できるようにする。
+// ℜ Reader Service Worker: アプリ本体をキャッシュして、PCがオフでも起動できるようにする。
 // /api/ は常にネットへ（本の中身はIndexedDBに保存するのでここでは扱わない）。
-const CACHE = "sid-reader-v0.20.0";
-const SHELL = ["./", "index.html", "app.js", "app.css", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png"];
+const CACHE = "sid-reader-v0.21.0";
+const SHELL = ["./", "index.html", "app.js", "app.css", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
