@@ -404,3 +404,14 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
   .dock { gap: 10px; }
   .fabMenu { right: calc(100% + 10px); }
 }
+
+/* v0.22: フォルダ */
+.folderHead { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
+.folderHead b { font-size: 16px; }
+.folderCv { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 3px; padding: 6px; background: var(--glass-hi); }
+.folderCv .fc { position: relative; border-radius: 6px; overflow: hidden; background: var(--tile); }
+.folderCv .fc img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.ssFolders { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+.ssFolders .row { flex: 1 1 220px; }
+.folderInput { flex: 1; min-width: 0; height: 34px; border-radius: 999px; border: 1px solid var(--line2); background: var(--glass-hi); padding: 0 12px; color: var(--ink); font-size: 13px; outline: none; }
+.contItem.off { opacity: .55; }
