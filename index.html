@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#eceef1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111216" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="SID">
+  <title>SIDリーダー</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Barlow+Semi+Condensed:wght@500;700&display=swap">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true">SID</span><span class="brandName">リーダー</span></div>
+    <div class="links">
+      <span id="net" class="chip" title="PCとの接続">PC …</span>
+      <span id="ghNet" class="chip hidden" title="GitHubとの同期">GitHub</span>
+    </div>
+    <button id="installBtn" class="install hidden" type="button">アプリにする</button>
+    <nav class="topnav">
+      <button data-view="library" class="navbtn active" type="button">本棚</button>
+      <button data-view="add" class="navbtn" type="button">追加</button>
+      <button data-view="settings" class="navbtn" type="button">設定</button>
+    </nav>
+  </header>
+
+  <main id="views">
+    <section id="view-library" class="view">
+      <div id="continueBox" class="continueBox hidden">
+        <h2 class="shelfTitle">続きを読む</h2>
+        <div id="continueShelf" class="shelf"></div>
+      </div>
+      <div class="libHead">
+        <div class="seg" role="tablist">
+          <button class="tab active" data-lib="saved" type="button">この端末</button>
+          <button class="tab" data-lib="pc" type="button">PCの本</button>
+        </div>
+        <button id="libReload" class="iconBtn" type="button" title="更新" aria-label="更新">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3.5h-3.5"/></svg>
+        </button>
+      </div>
+      <div id="libToolbar" class="toolbar">
+        <input id="libFilter" type="search" placeholder="作品名でさがす">
+        <label class="chk"><input id="showKindle" type="checkbox"> Kindle版も表示</label>
+      </div>
+      <div id="libNotice" class="notice hidden"></div>
+      <div id="libList" class="series-list"></div>
+      <label class="filebtn">
+        <span><b>ファイルから追加</b><small>Google ドライブや「ファイル」アプリのEPUBを、この端末に保存します</small></span>
+        <input id="importFile" type="file" accept=".epub,application/epub+zip" multiple>
+      </label>
+      <div id="storageInfo" class="muted small"></div>
+    </section>
+
+    <section id="view-add" class="view hidden">
+      <h2>作品を追加</h2>
+      <p class="muted">漫画の<b>一覧ページ</b>のURLを送ると、PCが新しい話をダウンロードしてEPUBにします。PCが止まっていても、GitHubにつないでいれば預けておけます。</p>
+      <textarea id="addUrl" rows="3" placeholder="https://… を貼り付け（共有された文章のままでも大丈夫）"></textarea>
+      <div class="opts">
+        <label class="chk"><input id="addDrive" type="checkbox"> Google ドライブへ</label>
+        <label class="chk"><input id="addKindle" type="checkbox"> Send to Kindleへ</label>
+      </div>
+      <div class="row"><button id="pasteBtn" class="ghost" type="button">貼り付け</button><button id="addSubmit" class="primary grow" type="button">PCへ送る</button></div>
+      <div id="addMsg" class="msg"></div>
+      <div id="pendingBox" class="notice hidden"></div>
+      <div class="rowHead"><h3>依頼の状況</h3><button id="reqReload" class="ghost small" type="button">更新</button></div>
+      <ul id="reqList" class="req-list"></ul>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <h2>つなぐ</h2>
+      <ul class="stateList" id="connState"></ul>
+      <label class="field">PCで表示したURLを貼る（QRを読めないとき）
+        <span class="row"><input id="tokenInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://…#t=… または合言葉"><button id="tokenSave" class="primary" type="button">つなぐ</button></span>
+      </label>
+      <div id="tokenMsg" class="msg"></div>
+      <h3>読み方</h3>
+      <label class="field">ページ送り
+        <select id="prefDir"><option value="rtl">右開き（漫画）</option><option value="ltr">左開き</option></select>
+      </label>
+      <label class="field">見開き
+        <select id="prefSpread"><option value="auto">横向きのとき見開き</option><option value="off">いつも1ページ</option><option value="on">いつも見開き</option></select>
+      </label>
+      <label class="chk block"><input id="prefCoverSingle" type="checkbox" checked> 見開きでも1ページ目（表紙）は1枚で表示</label>
+      <label class="chk block"><input id="prefSync" type="checkbox" checked> 読んだ位置をほかの端末と同期（PC・GitHub）</label>
+      <h3>この端末の保存領域</h3>
+      <div id="storageDetail" class="muted small"></div>
+      <div class="row wrap">
+        <button id="persistBtn" class="ghost" type="button">消されにくくする</button>
+        <button id="clearAll" class="danger" type="button">この端末の本をすべて削除</button>
+      </div>
+      <p class="muted small">iPadはSafariとホーム画面のアプリで保存場所が別です。オフラインで読む本は、ホーム画面から開いたアプリで保存してください。</p>
+      <p id="appVersion" class="muted small"></p>
+    </section>
+  </main>
+
+  <nav class="bottomnav" aria-label="画面">
+    <button data-view="library" class="navbtn active" type="button"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 5l3.7 1-3.9 14.4-3.7-1z"/></svg><span>本棚</span></button>
+    <button data-view="add" class="navbtn" type="button"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg><span>追加</span></button>
+    <button data-view="settings" class="navbtn" type="button"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>設定</span></button>
+  </nav>
+
+  <div id="reader" class="hidden" aria-hidden="true">
+    <div id="stage">
+      <img id="pgA" alt="" draggable="false">
+      <img id="pgB" alt="" draggable="false">
+    </div>
+    <div id="rLoading" class="r-loading hidden">読み込み中…</div>
+    <div id="rTop" class="r-bar r-top hidden">
+      <button id="rBack" class="rbtn" type="button">本棚</button>
+      <div id="rTitle" class="r-title"></div>
+      <div id="rPage" class="r-page"></div>
+    </div>
+    <div id="rBottom" class="r-bar r-bottom hidden">
+      <input id="rSlider" type="range" min="1" max="1" value="1" aria-label="ページ">
+      <div class="row">
+        <button id="rSpread" class="rbtn" type="button">見開き: 自動</button>
+        <button id="rDir" class="rbtn" type="button">右開き</button>
+        <button id="rFull" class="rbtn" type="button">全画面</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
