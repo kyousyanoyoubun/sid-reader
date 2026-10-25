@@ -1,13 +1,13 @@
 {
-  "name": "SIDリーダー",
-  "short_name": "SID",
-  "description": "Series Image DownloaderのEPUBを読む・保存する・PCへ依頼する",
+  "name": "ℜ Reader",
+  "short_name": "ℜ",
+  "description": "PC（D:\\epub）の漫画・小説を読む・保存する・PCへ依頼する",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#eceef1",
-  "theme_color": "#eceef1",
+  "background_color": "#eceef2",
+  "theme_color": "#eceef2",
   "lang": "ja",
   "icons": [
     {
@@ -21,7 +21,7 @@
       "type": "image/png"
     },
     {
-      "src": "icon-512.png",
+      "src": "icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
