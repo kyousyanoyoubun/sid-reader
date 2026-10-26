@@ -415,3 +415,16 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 .ssFolders .row { flex: 1 1 220px; }
 .folderInput { flex: 1; min-width: 0; height: 34px; border-radius: 999px; border: 1px solid var(--line2); background: var(--glass-hi); padding: 0 12px; color: var(--ink); font-size: 13px; outline: none; }
 .contItem.off { opacity: .55; }
+
+/* v0.23: 下に引っ張って更新 */
+html.ptrOn, html.ptrOn body { overscroll-behavior-y: contain; }
+.ptr { position: fixed; left: 50%; top: calc(var(--safe-t) + 8px); z-index: 60; width: 40px; height: 40px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--glass-hi); border: 1px solid var(--glass-brd); box-shadow: var(--shadow-s);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); opacity: 0; transform: translate(-50%, -56px); pointer-events: none;
+  transition: opacity .15s; }
+.ptr svg { width: 22px; height: 22px; }
+.ptr.show { transition: none; }
+.ptr.ready { box-shadow: 0 0 0 2px var(--ink2), var(--shadow-s); }
+.ptr.spin { transition: transform .2s var(--ease); }
+.ptr.spin svg { animation: ptrSpin .8s linear infinite; }
+@keyframes ptrSpin { to { transform: rotate(360deg); } }
