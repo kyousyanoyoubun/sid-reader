@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ℜ Reader とつなぐ</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f3f4f7; --card: #fff; --ink: #15161a; --mute: #6d717b; --acc: #15161a; --acc-ink: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1013; --card: #1b1c21; --ink: #eef0f4; --mute: #9094a0; --acc: #eef0f4; --acc-ink: #15161a; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink);
+         font: 15px/1.6 "BIZ UDPGothic", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; padding: 16px; }
+  main { width: min(420px, 100%); background: var(--card); border-radius: 22px; padding: 26px 22px; box-shadow: 0 14px 40px rgba(0,0,0,.12); text-align: center; }
+  .mark { font: 700 44px/1 Georgia, serif; }
+  h1 { font-size: 19px; margin: 10px 0 4px; }
+  p { color: var(--mute); margin: 6px 0 18px; font-size: 13.5px; }
+  a.btn { display: block; padding: 14px; border-radius: 14px; text-decoration: none; font-weight: 700; margin-top: 10px; }
+  .primary { background: var(--acc); color: var(--acc-ink); }
+  .ghost { color: var(--ink); border: 1px solid rgba(127,127,127,.35); }
+  .small { font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">ℜ</div>
+  <h1>ℜ Reader とPCをつなぐ</h1>
+  <p id="msg">Androidアプリを入れたスマホなら「アプリで開く」を押してください。</p>
+  <a id="openApp" class="btn primary" href="#">アプリで開く</a>
+  <a id="openWeb" class="btn ghost" href="#">このブラウザで読む</a>
+  <a id="getApk" class="btn ghost" href="rreader.apk">アプリ（APK）をダウンロード</a>
+  <p class="small">このページの住所には合言葉が入っています。人に送らないでください。</p>
+</main>
+<script>
+"use strict";
+// v0.23: QRを短くするため、PCのhelperが /app/p/<コード> → ここへ合言葉付きで転送する。
+(() => {
+  const hash = location.hash.slice(1);
+  history.replaceState(null, "", location.pathname);
+  const webUrl = `${location.origin}/app/#${hash}`;
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  // アプリが入っていないときはAPKのダウンロードへ
+  const intent = `intent://pair?u=${encodeURIComponent(webUrl)}#Intent;scheme=rreader;package=jp.rreader.app;S.browser_fallback_url=${encodeURIComponent(location.origin + "/app/rreader.apk")};end`;
+  const plain = `rreader://pair?u=${encodeURIComponent(webUrl)}`;
+  const openApp = document.getElementById("openApp");
+  openApp.href = isAndroid ? intent : plain;
+  document.getElementById("openWeb").href = webUrl;
+  if (!hash) { document.getElementById("msg").textContent = "合言葉が見つかりません。PCでQRを出し直してください。"; openApp.remove(); return; }
+  if (!isAndroid) { openApp.remove(); document.getElementById("getApk").remove(); document.getElementById("msg").textContent = "このブラウザで読むには下のボタンを押してください。"; }
+
+})();
+</script>
+</body>
+</html>
