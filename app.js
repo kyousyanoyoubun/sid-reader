@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.22.0";
+const APP_VERSION = "0.23.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -1604,6 +1604,62 @@ $("clearAll").addEventListener("click", async () => {
   toast("削除しました"); renderStorageInfo();
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (prefs.theme === "auto") updateThemeTile(); });
+
+// ---------------- v0.23: スマホ連携（QR）をアプリが開いている最中でも取り込む ----------------
+async function pairNow(text) {
+  if (!applyPairing(text)) return false;
+  history.replaceState(null, "", location.pathname + location.search);
+  pcLibrary = null;
+  const ok = await checkServer();
+  toast(ok ? "PCにつながりました" : gistOn() ? "GitHubを設定しました（PCは今はつながっていません）" : "合言葉を保存しました（PCにはまだつながっていません）", 3200);
+  if (ok) { await loadPcLibrary(false); syncAllProgress(); }
+  gistSyncProgress().catch(() => {}).finally(renderConn);
+  showView("library");
+  return true;
+}
+window.__sidPair = text => { pairNow(String(text || "")).catch(() => {}); return true; };
+addEventListener("hashchange", () => { if (location.hash.length > 1) pairNow(location.href).catch(() => {}); });
+
+// ---------------- v0.23: 下に引っ張って更新（アプリ/ホーム画面版。本を読んでいる間は無効） ----------------
+async function refreshCurrentView() {
+  await checkServer();
+  if (currentView === "library") { if (online) await loadPcLibrary(true); await renderLibrary(false); }
+  else if (currentView === "continue") { if (gistOn()) await gistSyncProgress().catch(() => {}); if (online) await syncAllProgress().catch(() => {}); await renderContinue(); }
+  else if (currentView === "requests") await loadRequests();
+  else renderSettings();
+  toast(online ? "更新しました" : "PCにつながっていません（保存した本だけ表示）");
+}
+(() => {
+  const enabled = !!window.SIDNative || matchMedia("(display-mode: standalone)").matches;
+  if (!enabled) return; // 普通のブラウザはブラウザ自身の引っ張って更新がある
+  document.documentElement.classList.add("ptrOn");
+  const ind = el("div", "ptr"); ind.setAttribute("aria-hidden", "true"); ind.append(svgUse("i-refresh"));
+  document.body.append(ind);
+  const PULL = 72, MAX = 120;
+  let y0 = null, x0 = 0, d = 0, busy = false;
+  const blocked = () => !$("reader").classList.contains("hidden") || !!document.querySelector(".sheet:not(.hidden)") || $("dock").classList.contains("open");
+  const place = v => { ind.style.transform = `translate(-50%, ${v - 56}px) rotate(${v * 3}deg)`; ind.style.opacity = String(Math.min(1, v / PULL)); };
+  const reset = () => { ind.classList.remove("show", "ready", "spin"); ind.style.transform = ""; ind.style.opacity = ""; d = 0; };
+  addEventListener("touchstart", e => {
+    if (busy || e.touches.length !== 1 || scrollY > 0 || blocked()) { y0 = null; return; }
+    y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; d = 0;
+  }, { passive: true });
+  addEventListener("touchmove", e => {
+    if (y0 == null) return;
+    const dy = e.touches[0].clientY - y0, dx = Math.abs(e.touches[0].clientX - x0);
+    if (dy <= 0 || scrollY > 0 || dx > dy) { if (d) reset(); return; }
+    d = Math.min(MAX, dy * 0.5);
+    ind.classList.add("show"); ind.classList.toggle("ready", d >= PULL); place(d);
+  }, { passive: true });
+  addEventListener("touchend", async () => {
+    if (y0 == null) return;
+    y0 = null;
+    if (d < PULL || blocked()) { reset(); return; }
+    busy = true; ind.classList.add("spin"); place(PULL);
+    try { await refreshCurrentView(); } catch (e) { toast(String(e.message || e)); }
+    finally { busy = false; reset(); }
+  }, { passive: true });
+})();
 
 // ---------------- 起動 ----------------
 // Androidアプリの「戻る」ボタン
