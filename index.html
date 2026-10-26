@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
-  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="app.css?v=0.24.1">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -101,7 +101,7 @@
         <div id="siteModesList" class="siteModesList muted small">PCかGitHubにつながると表示されます</div>
         <div class="row smAdd">
           <input id="smHost" type="text" class="folderInput" placeholder="example.com" autocomplete="off" spellcheck="false">
-          <div class="seg" id="smNew"><button data-v="normal" type="button" class="on">ふつう</button><button data-v="twostep" type="button">2段階</button><button data-v="gallery" type="button">画像</button></div>
+          <div class="seg" id="smNew"><button data-v="normal" type="button" class="on">ふつう</button><button data-v="twostep" type="button">2段階</button><button data-v="gallery" type="button">画像</button><button data-v="chain" type="button">多段階</button></div>
           <button id="smAdd" class="btn small" type="button">登録</button>
         </div>
       </div>
@@ -210,6 +210,7 @@
           <button data-v="normal" type="button">ふつう<em>一覧→話</em></button>
           <button data-v="twostep" type="button">2段階<em>話→ボタン</em></button>
           <button data-v="gallery" type="button">画像ページ<em>1冊に</em></button>
+          <button data-v="chain" type="button">多段階<em>話→押す…</em></button>
         </div>
         <div class="muted small" id="modeHint">サイトごとに登録した型を使います（登録が無ければふつう）。</div>
         <label class="row small hidden" id="rememberRow"><input id="rememberMode" type="checkbox" class="toggle"><span>このサイトの型として覚える</span></label>
@@ -321,6 +322,6 @@
   </div>
 
   <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=0.24.1"></script>
 </body>
 </html>
