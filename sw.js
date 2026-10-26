@@ -1,7 +1,7 @@
 // ℜ Reader Service Worker: アプリ本体をキャッシュして、PCがオフでも起動できるようにする。
 // /api/ は常にネットへ（本の中身はIndexedDBに保存するのでここでは扱わない）。
-const CACHE = "sid-reader-v0.24.0";
-const SHELL = ["./", "index.html", "app.js", "app.css", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
+const CACHE = "sid-reader-v0.24.1";
+const SHELL = ["./", "index.html", "app.js?v=0.24.1", "app.css?v=0.24.1", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -20,7 +20,17 @@ self.addEventListener("fetch", e => {
       .catch(() => caches.match("index.html").then(r => r || caches.match("./"))));
     return;
   }
-  // それ以外: キャッシュを返しつつ裏で更新
+  // v0.24.1: 本体(app.js/app.css)はまずネット（4秒で諦めてキャッシュ）。以前は古いキャッシュを先に返していたため、
+  // iPadなどで新しいページ＋古いapp.jsの組み合わせになり、表示や機能がAPKと違うことがあった
+  const shell = /\/(app\.js|app\.css|manifest\.webmanifest|pair\.html)$/.test(url.pathname);
+  if (shell) {
+    e.respondWith(Promise.race([
+      fetch(e.request).then(r => { if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); } return r; }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))
+    ]).catch(() => caches.match(e.request).then(hit => hit || caches.match(e.request, { ignoreSearch: true })).then(hit => hit || fetch(e.request))));
+    return;
+  }
+  // それ以外（アイコンなど）: キャッシュを返しつつ裏で更新
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(hit => {
     const net = fetch(e.request).then(r => { if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); } return r; }).catch(() => hit);
     return hit || net;
