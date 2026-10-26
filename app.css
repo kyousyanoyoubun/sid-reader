@@ -428,3 +428,136 @@ html.ptrOn, html.ptrOn body { overscroll-behavior-y: contain; }
 .ptr.spin { transition: transform .2s var(--ease); }
 .ptr.spin svg { animation: ptrSpin .8s linear infinite; }
 @keyframes ptrSpin { to { transform: rotate(360deg); } }
+
+/* ======================= v0.24 ======================= */
+/* カテゴリ（上のタブ） */
+.catTabs {
+  position: sticky; top: calc(58px + var(--safe-t)); z-index: 15;
+  display: flex; gap: 2px; padding: 4px; margin: 2px 0 14px; border-radius: 999px; overflow-x: auto; scrollbar-width: none;
+  box-shadow: var(--shadow-s), inset 0 1px 0 var(--glass-in);
+}
+.catTabs::-webkit-scrollbar { display: none; }
+.catTab {
+  flex: 1 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 36px; padding: 0 10px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--ink2); font-size: 13px; cursor: pointer; white-space: nowrap;
+  transition: background .25s var(--ease), color .2s, box-shadow .25s;
+}
+.catTab b { font-weight: 400; font-size: 11px; color: var(--mute); font-variant-numeric: tabular-nums; }
+.catTab.on { background: var(--ind); color: var(--ink); font-weight: 700; box-shadow: var(--ind-shadow); }
+.catTab.none { color: var(--warn); }
+.catTab.none.on { color: var(--ink); box-shadow: var(--ind-shadow), inset 0 0 0 1.5px color-mix(in srgb, var(--warn) 55%, transparent); }
+.topbar.hide ~ main .catTabs { top: calc(6px + var(--safe-t)); }
+
+/* 一覧（左に表紙、右にタイトル・シリーズ・作者） */
+.libList { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px; }
+.lrow {
+  all: unset; box-sizing: border-box; cursor: pointer; position: relative;
+  display: grid; grid-template-columns: 56px 1fr; gap: 14px; align-items: center; padding: 9px 14px 9px 9px; min-width: 0;
+  border-radius: 18px; background: var(--glass); border: 1px solid var(--glass-brd);
+  box-shadow: var(--shadow-s), inset 0 1px 0 var(--glass-in);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  transition: transform .25s var(--spring), box-shadow .25s, border-color .2s;
+}
+.lrow:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.lrow:active, .lrow.pressed { transform: scale(.98); }
+@media (hover: hover) { .lrow:hover { box-shadow: var(--shadow), inset 0 1px 0 var(--glass-in); } }
+.lrow .cv { width: 56px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, .14); }
+.lrow .cv .ph { font-size: 10px; padding: 4px; }
+.lrow .cv .ph.novel { font-size: 11px; }
+.lrow .cv.stack { overflow: visible; margin: 7px 8px 0 0; width: 48px; justify-self: start;
+  box-shadow: 4px -4px 0 -1px var(--glass-hi), 4px -4px 0 0 var(--line2), 8px -8px 0 -2px var(--tile), 8px -8px 0 -1px var(--line), 0 2px 8px rgba(0, 0, 0, .16); }
+.lrow .cv.stack img, .lrow .cv.stack .ph { border-radius: 8px; overflow: hidden; }
+.lt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lt .l1 { font-weight: 700; font-size: 14.5px; line-height: 1.38; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lt .l2 { font-size: 12.5px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lt .l3 { font-size: 11.5px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lt .bar { margin-top: 6px; height: 3px; max-width: 220px; }
+.lrow.off { opacity: .55; }
+.lrow.off .cv { filter: grayscale(.6); }
+.selMark { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--line2); display: grid; place-items: center; color: transparent; background: var(--glass-hi); transition: background .2s, border-color .2s; }
+.selMark svg { width: 16px; height: 16px; }
+.lrow.selecting { padding-right: 48px; }
+.lrow.picked { border-color: var(--ink2); }
+.lrow.picked .selMark { background: var(--ink); border-color: var(--ink); color: var(--bg1); }
+.fhText { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.fhText small { font-size: 11px; color: var(--mute); }
+.fhText b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 複数選択のバー */
+.selBar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + var(--safe-b)); z-index: 45;
+  width: min(560px, calc(100vw - 24px)); display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 18px; border-radius: 999px;
+  font-size: 13px; font-weight: 700; animation: barIn .3s var(--ease);
+}
+
+/* 分類シート */
+.msHead { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.msHead h3 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msHead small { font-size: 12px; }
+.catSeg button { font-size: 12.5px; padding: 9px 2px; }
+.field .row input[type=text] { flex: 1; min-width: 0; }
+.msActs { padding: 4px 0 12px; }
+
+/* 読書画面の下のバー */
+.rTools { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+.rTool {
+  display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 14px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--ink); font-size: 12.5px; cursor: pointer; transition: background .2s;
+}
+.rTool:active { background: var(--line); }
+.rTool svg { width: 20px; height: 20px; }
+.rTool.strong { background: var(--line); font-weight: 700; }
+.rTool.on { background: var(--ink); color: var(--bg1); }
+
+/* 表示の設定パネル */
+.rPanel {
+  position: absolute; z-index: 6; right: 10px; bottom: calc(112px + var(--safe-b));
+  width: min(390px, calc(100vw - 20px)); max-height: min(72vh, calc(100vh - 200px)); overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 24px; padding: 6px 16px 10px; background: var(--glass-hi);
+  animation: panelIn .35s var(--spring); transform-origin: 90% 100%;
+}
+@keyframes panelIn { from { opacity: 0; transform: translateY(10px) scale(.96); } }
+.rPanel:not(.text) .textOnly, .rPanel.text .mangaOnly { display: none; }
+.rpSec { padding: 12px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 9px; }
+.rpSec:last-child { border-bottom: 0; }
+.rpLbl { font-size: 12px; font-weight: 700; color: var(--mute); letter-spacing: .04em; }
+.rpRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rpRow b { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink2); }
+.rPanel input[type=range] { width: 100%; accent-color: var(--ink); direction: ltr; }
+.rpSlide { display: flex; align-items: center; gap: 10px; }
+.rpSlide .aS { font-size: 12px; color: var(--mute); }
+.rpSlide .aL { font-size: 20px; color: var(--mute); }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 8px; }
+.sw { border: 0; padding: 0; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--ink2); }
+.sw span { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 15px; font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14); transition: transform .25s var(--spring), box-shadow .2s; }
+.sw small { font-size: 10.5px; color: var(--mute); }
+.sw.on span { box-shadow: 0 0 0 2px var(--glass-hi), 0 0 0 4px var(--ink); transform: scale(1.04); }
+.fontList { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+.fontBtn { border: 1px solid var(--line2); border-radius: 14px; background: var(--glass-in); padding: 8px 4px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--ink); }
+.fontBtn .fs { font-size: 20px; line-height: 1.2; }
+.fontBtn small { font-size: 10.5px; color: var(--mute); white-space: nowrap; }
+.fontBtn.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.rPanel .seg.wide button { font-size: 12px; }
+
+/* 依頼（小数話・型） */
+.decRow { gap: 10px; }
+#rememberRow { gap: 10px; color: var(--ink2); margin-top: 4px; }
+#rememberRow .toggle { transform: scale(.85); }
+.reqList .tag { margin-left: 4px; }
+
+/* 設定: サイトの型 */
+.siteModesList { padding: 10px 0 4px; display: flex; flex-direction: column; gap: 10px; }
+.smGroup { display: flex; flex-direction: column; gap: 4px; }
+.smHead { font-size: 12px; font-weight: 700; color: var(--mute); }
+.smRow { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.smRow:last-child { border-bottom: 0; }
+.smHost { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink); }
+.smRow .seg button { padding: 4px 9px; font-size: 11.5px; }
+.smRow .iconBtn { width: 32px; height: 32px; }
+.smRow .iconBtn svg { width: 16px; height: 16px; }
+.smAdd { padding: 8px 0 12px; flex-wrap: wrap; }
+.smAdd .folderInput { flex: 1 1 140px; }
+@media (max-width: 420px) { .smRow { flex-wrap: wrap; } .smHost { flex-basis: 100%; } }
