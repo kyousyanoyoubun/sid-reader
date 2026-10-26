@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.24.0";
+const APP_VERSION = "0.24.1";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -124,13 +124,20 @@ async function api(path, opts = {}) {
   } finally { clearTimeout(t); }
 }
 let netState = { pc: "", pcText: "" };
+let failStreak = 0;
 async function checkServer() {
   const before = online;
   if (!token) { online = false; netState = { pc: "none", pcText: "未設定" }; }
   else if (!apiBase && /github\.io$/.test(location.hostname)) { online = false; netState = { pc: "none", pcText: "PCのURLなし" }; }
   else {
-    try { serverInfo = await api("/api/info", { timeout: 5000 }); online = true; netState = { pc: "on", pcText: "つながっています" }; flushPending(); }
-    catch (e) { online = false; netState = { pc: "off", pcText: e.auth ? "合言葉が違います" : "いまはつながっていません" }; }
+    // v0.24.1: 1回の失敗ではオフにしない（Tailscale/Funnel経由や、iPadで画面に戻った直後は1回目が失敗しやすい）
+    let ok = false, err = null;
+    for (let i = 0; i < (online ? 3 : 2) && !ok; i++) {
+      try { serverInfo = await api("/api/info", { timeout: i ? 12000 : 8000 }); ok = true; }
+      catch (e) { err = e; if (e.auth) break; await sleep(i ? 2500 : 1200); }
+    }
+    if (ok) { online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; flushPending(); }
+    else { failStreak++; online = false; netState = { pc: "off", pcText: err?.auth ? "合言葉が違います" : "いまはつながっていません" }; }
   }
   $("setDot").classList.toggle("hidden", online || !token);
   const first = !checkedOnce; checkedOnce = true;
@@ -149,11 +156,11 @@ function schedulePcCheck() {
   pcTimer = setTimeout(() => pcCheckNow(), delay);
 }
 async function pcCheckNow() {
-  if (Date.now() - lastCheckAt < 1500) return;
-  lastCheckAt = Date.now();
+  if (Date.now() - lastCheckAt < 1500 || pcCheckNow.busy) return;
+  lastCheckAt = Date.now(); pcCheckNow.busy = true;
   const was = online;
-  try { await checkServer(); } finally { schedulePcCheck(); }
-  if (!was && online) { toast("PCにつながりました"); syncLibMeta().catch(() => {}); if (!pcLibrary || currentView === "library") { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); } }
+  try { await checkServer(); } finally { pcCheckNow.busy = false; schedulePcCheck(); }
+  if (!was && online) { if (checkedOnce && failStreak === 0 && Date.now() - (pcCheckNow.lastToast || 0) > 60000) { pcCheckNow.lastToast = Date.now(); toast("PCにつながりました"); } syncLibMeta().catch(() => {}); if (!pcLibrary || currentView === "library") { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); } }
 }
 
 // ---------------- GitHub Gist（PCを通さずに 依頼・読んだ位置 を預ける/同期） ----------------
@@ -1677,8 +1684,8 @@ $("addUrl").addEventListener("input", () => { if (pick && extractUrl($("addUrl")
 $("reqAdd").addEventListener("click", () => openAdd());
 // v0.24: サイトの型（自動=登録どおり）
 let addMode = "";
-const MODE_NAME = { normal: "ふつう", twostep: "2段階", gallery: "画像ページ型" };
-const MODE_HINT = { "": "サイトごとに登録した型を使います（登録が無ければふつう）。", normal: "一覧ページに各話へのリンクが並ぶサイト。", twostep: "話を開いたあと「チャプターを見る」などのボタンで画像が出るサイト。作品ページから順に押して開きます。", gallery: "作品ページの小さい画像を押すと大きい画像のページになるサイト。全ページを1冊にします。" };
+const MODE_NAME = { normal: "ふつう", twostep: "2段階", gallery: "画像ページ型", chain: "多段階" };
+const MODE_HINT = { "": "サイトごとに登録した型を使います（登録が無ければふつう）。", normal: "一覧ページに各話へのリンクが並ぶサイト。", twostep: "話を開いたあと「チャプターを見る」などのボタンで画像が出るサイト。作品ページから順に押して開きます。", gallery: "作品ページの小さい画像を押すと大きい画像のページになるサイト。全ページを1冊にします。", chain: "話のページから、ボタンを順に押して別のサイトへ移っていくサイト（押すものはPCの拡張機能で設定）。" };
 function renderModeSeg() {
   $("modeSeg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === addMode));
   $("rememberRow").classList.toggle("hidden", !addMode);
@@ -1960,13 +1967,13 @@ function renderSiteModes() {
   const items = Object.entries(siteModesCache).filter(([, v]) => v.mode).map(([o, v]) => ({ o, host: o.replace(/^https?:\/\//, ""), mode: v.mode })).sort((a, b) => a.host.localeCompare(b.host));
   box.classList.toggle("muted", !items.length);
   if (!items.length) { box.textContent = online || gistOn() ? "登録したサイトはまだありません。PCの拡張機能で型を選ぶか、ここで登録できます。" : "PCかGitHubにつながると表示されます"; return; }
-  for (const mode of ["normal", "twostep", "gallery"]) {
+  for (const mode of ["normal", "twostep", "gallery", "chain"]) {
     const mine = items.filter(x => x.mode === mode); if (!mine.length) continue;
     const g = el("div", "smGroup"); g.append(el("div", "smHead", `${MODE_NAME[mode]}（${mine.length}）`));
     for (const it of mine) {
       const row = el("div", "smRow");
       const seg = el("div", "seg");
-      for (const m of ["normal", "twostep", "gallery"]) { const b = el("button", m === it.mode ? "on" : "", { normal: "ふつう", twostep: "2段階", gallery: "画像" }[m]); b.type = "button"; b.addEventListener("click", () => setSiteModeRemote(it.o, m).then(renderSiteModes).catch(e => toast(e.message))); seg.append(b); }
+      for (const m of ["normal", "twostep", "gallery", "chain"]) { const b = el("button", m === it.mode ? "on" : "", { normal: "ふつう", twostep: "2段階", gallery: "画像", chain: "多段" }[m]); b.type = "button"; b.addEventListener("click", () => setSiteModeRemote(it.o, m).then(renderSiteModes).catch(e => toast(e.message))); seg.append(b); }
       const del = el("button", "iconBtn"); del.type = "button"; del.setAttribute("aria-label", "登録を外す"); del.append(svgUse("i-x"));
       del.addEventListener("click", () => setSiteModeRemote(it.o, "").then(renderSiteModes).catch(e => toast(e.message)));
       row.append(el("span", "smHost", it.host), seg, del); g.append(row);
@@ -2072,5 +2079,6 @@ window.__sidBack = () => {
   addEventListener("online", () => pcCheckNow());
   addEventListener("focus", () => pcCheckNow());
   addEventListener("pageshow", () => pcCheckNow());
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) pcCheckNow(); else clearTimeout(pcTimer); });
+  // 画面に戻った直後は回線が戻っていないことがあるので少し待ってから確認
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) setTimeout(pcCheckNow, 900); else clearTimeout(pcTimer); });
 })();
