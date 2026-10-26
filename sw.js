@@ -1,6 +1,6 @@
 // ℜ Reader Service Worker: アプリ本体をキャッシュして、PCがオフでも起動できるようにする。
 // /api/ は常にネットへ（本の中身はIndexedDBに保存するのでここでは扱わない）。
-const CACHE = "sid-reader-v0.22.0";
+const CACHE = "sid-reader-v0.23.0";
 const SHELL = ["./", "index.html", "app.js", "app.css", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
 
 self.addEventListener("install", e => {
@@ -13,6 +13,8 @@ self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
   if (e.request.mode === "navigate") {
+    // v0.23: 本棚(index.html)以外のページ（スマホ連携のQRなど）はそのままネットへ
+    if (!/\/(index\.html)?$/.test(url.pathname)) return;
     // ページ本体: まずネット（更新を取り込む）、だめならキャッシュ
     e.respondWith(fetch(e.request).then(r => { const copy = r.clone(); caches.open(CACHE).then(c => c.put("index.html", copy)); return r; })
       .catch(() => caches.match("index.html").then(r => r || caches.match("./"))));
