@@ -1,11 +1,11 @@
-/* ℜ Reader v0.21 — PC（D:\epub）の本を読む・端末に保存する・PCへ依頼する PWA
+/* ℜ Reader v0.24 — PC（D:\epub）の本を読む・端末に保存する・PCへ依頼する PWA
  * - 本棚は「PCの本」が基本。端末に保存した本もPCの本として（✓付きで）表示する
  * - 漫画（画像EPUB）と小説（文章EPUB・縦書き/横書き）を読める
  * - EPUBはZIPを部分読み（Blob.slice + DecompressionStream）するので、200MBでもメモリに全展開しない
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.23.0";
+const APP_VERSION = "0.24.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -20,7 +20,10 @@ const LS = {
 };
 const prefs = {
   dir: LS.get("dir", "rtl"), spread: LS.get("spread", "auto"), coverSingle: LS.get("coverSingle", true), sync: LS.get("sync", true),
-  tap: LS.get("tap", "left"), stream: LS.get("stream", true), wm: LS.get("wm", "auto"), font: LS.get("font", 19), theme: LS.get("theme", "auto")
+  tap: LS.get("tap", "left"), stream: LS.get("stream", true), wm: LS.get("wm", "auto"), font: LS.get("font", 19), theme: LS.get("theme", "auto"),
+  // v0.24: 小説の表示
+  tbg: LS.get("tbg", "auto"), tfont: LS.get("tfont", "mincho"), tlh: LS.get("tlh", 1.85), tpad: LS.get("tpad", 1), tweight: LS.get("tweight", "400"),
+  tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto")
 };
 function setPref(k, v) { prefs[k] = v; LS.set(k, v); }
 function applyTheme() {
@@ -150,7 +153,7 @@ async function pcCheckNow() {
   lastCheckAt = Date.now();
   const was = online;
   try { await checkServer(); } finally { schedulePcCheck(); }
-  if (!was && online) { toast("PCにつながりました"); if (!pcLibrary || currentView === "library") { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); } }
+  if (!was && online) { toast("PCにつながりました"); syncLibMeta().catch(() => {}); if (!pcLibrary || currentView === "library") { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); } }
 }
 
 // ---------------- GitHub Gist（PCを通さずに 依頼・読んだ位置 を預ける/同期） ----------------
@@ -177,7 +180,8 @@ async function gistSubmit(body) {
   const name = `sid-req-${deviceId}.json`;
   const mine = jparse(files[name], []);
   mine.push({ id: `${deviceId}-${Date.now().toString(36)}`, url: body.url, deliver: body.deliver, device: deviceName, createdAt: Date.now() / 1000,
-    ...(body.selection ? { selection: body.selection } : {}), ...(body.title ? { title: body.title } : {}) });
+    ...(body.selection ? { selection: body.selection } : {}), ...(body.title ? { title: body.title } : {}),
+    ...(body.siteMode ? { siteMode: body.siteMode, rememberMode: !!body.rememberMode } : {}), ...(body.decimalMode ? { decimalMode: body.decimalMode } : {}), ...(body.coverUrl ? { coverUrl: body.coverUrl } : {}) });
   await gh("PATCH", `/gists/${GH.gist}`, { files: { [name]: { content: JSON.stringify(mine.slice(-40)) } } });
 }
 async function gistRequests() {
@@ -206,12 +210,19 @@ async function gistSyncProgress() {
           if (v && typeof v === "object" && (!cur || Number(v.at) > Number(cur.at))) { const rec = { key: k, ...v }; await DB.put("progress", rec).catch(() => {}); byKey.set(k, rec); pulled++; }
         }
       }
-      // フォルダ（新しい方を採用）
-      const remoteF = jparse(files["sid-folders.json"], null);
-      const localF = await getFolders();
-      if (remoteF && Number(remoteF.at) > Number(localF.at)) { foldersCache = remoteF; await kvSet("folders", remoteF); pulled++; }
-      else if (gistFoldersDirty || (localF.at && (!remoteF || Number(localF.at) > Number(remoteF.at)))) {
-        await gh("PATCH", `/gists/${GH.gist}`, { files: { "sid-folders.json": { content: JSON.stringify(localF) } } }); gistFoldersDirty = false;
+      // v0.24: 本棚の分類（カテゴリ・シリーズ・作者）。項目ごとに新しい方を採用し、足りない分を書き戻す
+      await getLibMeta();
+      const remoteL = jparse(files["sid-library.json"], {}) || {};
+      const gotL = mergeLibEntries(remoteL);
+      if (gotL) { await kvSet("libmeta", libMeta); pulled += gotL; }
+      if (Object.entries(libMeta.entries).some(([k, v]) => Number(v.t || 0) > Number(remoteL[k]?.t || 0))) {
+        await gh("PATCH", `/gists/${GH.gist}`, { files: { "sid-library.json": { content: JSON.stringify(libMeta.entries) } } });
+      }
+      // v0.24: サイトの型
+      const remoteS = jparse(files["sid-site-modes.json"], {}) || {};
+      if (mergeSiteModes(remoteS)) kvSet("siteModes", siteModesCache);
+      if (Object.entries(siteModesCache).some(([k, v]) => Number(v.t || 0) > Number(remoteS[k]?.t || 0))) {
+        await gh("PATCH", `/gists/${GH.gist}`, { files: { "sid-site-modes.json": { content: JSON.stringify(siteModesCache) } } });
       }
       const mine = {};
       for (const p of byKey.values()) mine[p.key] = { page: p.page, pages: p.pages, at: p.at, title: p.title, device: p.device, ...(p.d != null ? { d: p.d, f: p.f } : {}) };
@@ -221,7 +232,7 @@ async function gistSyncProgress() {
         gistProgressDirty = false;
       }
       ghState = { ok: true, at: Date.now(), err: "" };
-      if (pulled && R.book == null) { if (currentView === "library") renderLibrary(false); if (currentView === "continue") renderContinue(); }
+      if (pulled && R.book == null && !gistSyncProgress.quiet) { if (currentView === "library") renderLibrary(false); if (currentView === "continue") renderContinue(); }
       return pulled;
     } catch (e) { ghState = { ok: false, at: Date.now(), err: e.message || String(e) }; throw e; }
     finally { gistSyncing = null; }
@@ -294,7 +305,7 @@ async function syncNow() {
   const parts = [];
   if (gistOn()) { try { const n = await gistSyncProgress(); parts.push(`GitHub ✓${n ? `（${n}件更新）` : ""}`); } catch (e) { parts.push("GitHub ×"); } }
   await checkServer();
-  if (online) { await syncAllProgress(); parts.push("PC ✓"); }
+  if (online) { await syncAllProgress(); await syncLibMeta().catch(() => {}); parts.push("PC ✓"); }
   toast(parts.length ? `同期しました: ${parts.join(" / ")}` : "同期先がありません（設定でつないでください）");
   if (currentView === "continue") renderContinue();
 }
@@ -351,7 +362,7 @@ async function libraryModel() {
     if (!rec.key.startsWith("local:")) continue; // PCの本はPCの一覧の側で表示（二重に出さない）
     const t = rec.series || "端末で読み込んだEPUB";
     const id = "local:" + t;
-    if (!local.has(id)) local.set(id, { id, title: t, site: "", shelf: "この端末", kind: rec.kind || "", local: true, files: [] });
+    if (!local.has(id)) local.set(id, { id, title: t, site: "", shelf: "この端末", kind: rec.kind || "", local: true, files: [], updated: Math.round((rec.savedAt || 0) / 1000) });
     local.get(id).files.push({ key: rec.key, id: "", name: rec.name, variant: "", size: rec.size, range: "", localOnly: true });
   }
   const all = pcSeries.concat([...local.values()]);
@@ -391,28 +402,149 @@ function coverEl(url, title, kind) {
   return cv;
 }
 
+// ---------------- v0.24: 本棚の分類（カテゴリ・シリーズ・作者）。GitHubとPCで端末どうし同期 ----------------
+const CATS = [["manga", "漫画"], ["novel", "小説"], ["amanga", "成人漫画"], ["anovel", "成人小説"]];
+const CAT_LABEL = Object.fromEntries([...CATS, ["none", "未分類"]]);
+let libMeta = null; // { entries: { 作品ID: { cat, series, author, t } } }
+async function getLibMeta() {
+  if (libMeta) return libMeta;
+  libMeta = await kvGet("libmeta", null) || { entries: {} };
+  if (!libMeta.entries) libMeta.entries = {};
+  // v0.22の「フォルダ」は、シリーズ名として引き継ぐ（1回だけ）
+  if (!libMeta.migratedFolders) {
+    const fl = await kvGet("folders", null);
+    for (const f of fl?.list || []) for (const id of f.ids || []) {
+      const e = libMeta.entries[id] || {};
+      if (!e.series) libMeta.entries[id] = { ...e, series: f.name, t: Number(fl.at) || 1 };
+    }
+    libMeta.migratedFolders = true; await kvSet("libmeta", libMeta);
+  }
+  return libMeta;
+}
+const metaOf = id => libMeta?.entries?.[id] || {};
+async function setMeta(ids, patch) {
+  const m = await getLibMeta(); const t = Date.now();
+  for (const id of ids) {
+    const cur = { ...(m.entries[id] || {}) };
+    for (const [k, v] of Object.entries(patch)) { if (v) cur[k] = String(v).slice(0, 120); else delete cur[k]; }
+    cur.t = t; m.entries[id] = cur;
+  }
+  await kvSet("libmeta", m);
+  clearTimeout(setMeta.t); setMeta.t = setTimeout(() => syncLibMeta().catch(() => {}), 1500);
+}
+function mergeLibEntries(incoming) {
+  let n = 0; const m = libMeta;
+  for (const [k, v] of Object.entries(incoming || {})) {
+    if (!v || typeof v !== "object") continue;
+    if (Number(v.t || 0) > Number(m.entries[k]?.t || 0)) {
+      const rec = {}; for (const f of ["cat", "series", "author"]) if (v[f]) rec[f] = String(v[f]); rec.t = Number(v.t);
+      m.entries[k] = rec; n++;
+    }
+  }
+  return n;
+}
+let libSyncing = null;
+/** 分類をPC（つながっていれば）とGitHubで同期。項目ごとに新しい方を使う */
+async function syncLibMeta() {
+  if (libSyncing) return libSyncing;
+  libSyncing = (async () => {
+    await getLibMeta(); let pulled = 0;
+    if (online && prefs.sync) {
+      try { const r = await api("/api/libmeta", { method: "POST", body: { meta: libMeta.entries }, timeout: 8000 }); pulled += mergeLibEntries(r.meta); } catch (_) {}
+    }
+    if (pulled) await kvSet("libmeta", libMeta);
+    if (gistOn() && prefs.sync) { try { pulled += await gistSyncProgress() || 0; } catch (_) {} }
+    if (pulled && !R.book && currentView === "library") renderLibrary(false);
+    return pulled;
+  })().finally(() => { libSyncing = null; });
+  return libSyncing;
+}
+
 let renderSeq = 0;
 let lastModel = null;
+let curCat = LS.get("cat", "");
+let openGroup = null;      // { key, type: "series"|"author", name }
+let selecting = null;      // 複数選択中の作品ID
+const catOf = u => metaOf(u.id).cat || "none";
+/** シリーズ物: SIDの漫画（originalフォルダ）・EPUBが2冊以上の作品・自分でシリーズ名を付けた作品 */
+const isSeriesUnit = u => !!metaOf(u.id).series || u.files.length > 1 || (u.pc && u.kind === "manga");
+const unitScore = u => Math.max(Number(u.lastRead?.at) || 0, Number(u.updated) || 0);
+function groupUnits(units) {
+  const map = new Map(); const out = [];
+  const push = (key, type, name, u) => { let g = map.get(key); if (!g) { g = { key, type, name, units: [] }; map.set(key, g); out.push(g); } g.units.push(u); };
+  for (const u of units) {
+    const m = metaOf(u.id);
+    // シリーズ物は作品名をシリーズ名とみなす（外伝などに同じシリーズ名を付けると1つにまとまる）
+    const sk = m.series || (isSeriesUnit(u) ? u.title : "");
+    if (sk) push("s:" + sk, "series", sk, u);
+    else if (m.author) push("a:" + m.author, "author", m.author, u);
+    else push("u:" + u.id, "unit", u.title, u);
+  }
+  for (const g of out) { if (g.units.length === 1) g.type = "unit"; g.score = Math.max(...g.units.map(unitScore)); }
+  return out.sort((a, b) => b.score - a.score);
+}
+function unitSub(u, inGroup) {
+  const m = metaOf(u.id);
+  return [inGroup?.type === "series" ? "" : m.series && m.series !== u.title ? m.series : "", inGroup?.type === "author" ? "" : m.author].filter(Boolean).join(" ・ ");
+}
+function unitMeta(u) {
+  const parts = [];
+  if (u.files.length > 1) parts.push(`${u.files.length}冊`);
+  if (u.site && u.site !== metaOf(u.id).author) parts.push(u.site);
+  if (u.lastRead?.pages && u.lastRead.page > 0) parts.push(`${Math.round((u.lastRead.page + 1) / u.lastRead.pages * 100)}%`);
+  if (u.savedCount) parts.push(u.savedCount === u.files.length ? "端末に保存済み" : `端末に${u.savedCount}冊`);
+  return parts.join(" ・ ");
+}
+function rowEl({ title, sub, meta, kind, coverFor, stack, off, pct, sel }) {
+  const r = el("button", "lrow" + (off ? " off" : "") + (sel != null ? " selecting" : "") + (sel ? " picked" : "")); r.type = "button";
+  const cv = coverEl("", title, kind);
+  if (stack) cv.classList.add("stack");
+  if (coverFor) coverUrlFor(coverFor, lastModel?.idx || {}).then(u => { if (u) { const img = el("img"); img.alt = ""; img.loading = "lazy"; img.decoding = "async"; img.onload = () => cv.querySelector(".ph")?.remove(); img.onerror = () => img.remove(); img.src = u; cv.append(img); } });
+  const tx = el("div", "lt");
+  tx.append(el("div", "l1", title));
+  if (sub) tx.append(el("div", "l2", sub));
+  if (meta) tx.append(el("div", "l3", meta));
+  if (pct != null) { const b = el("div", "bar"); const i = el("i"); i.style.width = pct + "%"; b.append(i); tx.append(b); }
+  r.append(cv, tx);
+  if (sel != null) { const c = el("span", "selMark"); c.append(svgUse("i-check")); r.append(c); }
+  return r;
+}
+/** 長押し（PCは右クリックでも）でメニュー。押してすぐ離すと onTap */
+function bindPress(node, onTap, onLong) {
+  let t = null, x0 = 0, y0 = 0, fired = false;
+  const cancel = () => { clearTimeout(t); t = null; };
+  node.addEventListener("pointerdown", e => {
+    if (e.button > 0) return;
+    fired = false; x0 = e.clientX; y0 = e.clientY; cancel();
+    t = setTimeout(() => { t = null; fired = true; try { navigator.vibrate?.(12); } catch (_) {} node.classList.add("pressed"); setTimeout(() => node.classList.remove("pressed"), 220); onLong(); }, 480);
+  });
+  node.addEventListener("pointermove", e => { if (t && (Math.abs(e.clientX - x0) > 10 || Math.abs(e.clientY - y0) > 10)) cancel(); });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(ev => node.addEventListener(ev, cancel));
+  node.addEventListener("contextmenu", e => { e.preventDefault(); cancel(); if (!fired) { fired = true; onLong(); } });
+  node.addEventListener("click", e => { if (fired) { e.preventDefault(); fired = false; return; } onTap(); });
+}
+
 async function renderLibrary(reload = false) {
   const seq = ++renderSeq;
   if (reload || !pcLibrary) await loadPcLibrary(reload);
   if (seq !== renderSeq) return;
+  await getLibMeta();
   const model = await libraryModel(); lastModel = model;
   if (seq !== renderSeq) return;
   const filter = $("libFilter").value.trim().toLowerCase();
-  // 棚
-  const shelves = ["all"];
-  for (const s of model.series) if (!shelves.includes(s.shelf)) shelves.push(s.shelf);
-  if (!shelves.includes(shelf)) shelf = "all";
+  // カテゴリ（上のタブ）。未分類は、あるときだけ出す
+  const counts = { none: 0 }; for (const [c] of CATS) counts[c] = 0;
+  for (const u of model.series) counts[catOf(u)] = (counts[catOf(u)] || 0) + 1;
+  const tabs = CATS.map(([c]) => c).concat(counts.none ? ["none"] : []);
+  if (!tabs.includes(curCat) || (!counts[curCat] && !filter)) curCat = counts.none ? "none" : (tabs.find(c => counts[c]) || "manga");
   const chips = $("shelfChips"); chips.textContent = "";
-  for (const sh of shelves) {
-    const n = sh === "all" ? model.series.length : model.series.filter(s => s.shelf === sh).length;
-    const c = el("button", "chip" + (sh === shelf ? " on" : "")); c.type = "button"; c.setAttribute("role", "tab");
-    c.append(document.createTextNode(sh === "all" ? "すべて" : sh), el("b", "", String(n)));
-    c.addEventListener("click", () => { shelf = sh; LS.set("shelf", sh); renderLibrary(false); });
-    chips.append(c);
+  for (const c of tabs) {
+    const b = el("button", "catTab" + (c === curCat ? " on" : "") + (c === "none" ? " none" : "")); b.type = "button"; b.setAttribute("role", "tab");
+    b.append(document.createTextNode(CAT_LABEL[c]), el("b", "", String(counts[c] || 0)));
+    b.addEventListener("click", () => { curCat = c; LS.set("cat", c); openGroup = null; renderLibrary(false); scrollTo({ top: 0 }); });
+    chips.append(b);
   }
-  chips.classList.toggle("hidden", shelves.length <= 2);
+  chips.classList.remove("hidden");
   // お知らせ
   const notice = $("libNotice");
   notice.classList.add("hidden");
@@ -420,103 +552,149 @@ async function renderLibrary(reload = false) {
   else if (!checkedOnce) { /* 接続確認中 */ }
   else if (!online && pcLibrary) { notice.textContent = "PCにつながっていません。保存した本（✓）だけ読めます。一覧は前回のものです。"; notice.classList.remove("hidden"); }
   else if (!online && token) { notice.textContent = "PCにつながっていません。PC・Firefox・helperの起動と、Tailscaleを確認してください。"; notice.classList.remove("hidden"); }
-  // グリッド（フォルダにまとめた作品は、フォルダの中に）
-  let list = model.series.filter(s => shelf === "all" || s.shelf === shelf);
-  if (filter) list = list.filter(s => (s.title + " " + (s.site || "")).toLowerCase().includes(filter));
-  const fl = await getFolders();
-  const inFolder = new Map();
-  for (const f of fl.list) for (const id of f.ids) inFolder.set(id, f.name);
-  if (openFolder && !fl.list.some(f => f.name === openFolder)) openFolder = null;
+  else if (curCat === "none" && !openGroup && !selecting) { notice.textContent = "長押し（PCは右クリック）で、漫画・小説などに分けたり、シリーズ・作者を設定できます。まとめて分けるときは長押し →「複数選ぶ」。"; notice.classList.remove("hidden"); }
+  // 一覧
+  let units = model.series.filter(u => filter ? true : catOf(u) === curCat);
+  if (filter) units = units.filter(u => { const m = metaOf(u.id); return [u.title, u.site, m.series, m.author].filter(Boolean).join(" ").toLowerCase().includes(filter); });
+  let groups = groupUnits(units);
+  if (openGroup && !filter) {
+    const g = groups.find(x => x.key === openGroup.key);
+    if (!g) openGroup = null;
+    else groups = g.units.slice().sort((a, b) => a.title.localeCompare(b.title, "ja", { numeric: true })).map(u => ({ key: "u:" + u.id, type: "unit", name: u.title, units: [u] }));
+  }
   const head = $("folderHead");
-  head.classList.toggle("hidden", !openFolder || !!filter);
-  let folderTiles = [];
-  if (!filter) {
-    if (openFolder) { list = list.filter(s => inFolder.get(s.id) === openFolder); $("folderName").textContent = openFolder; chips.classList.add("hidden"); }
-    else {
-      for (const f of fl.list) {
-        const members = list.filter(s => inFolder.get(s.id) === f.name);
-        if (members.length) folderTiles.push({ f, members });
-      }
-      list = list.filter(s => !inFolder.has(s.id));
-    }
-  }
-  const grid = $("seriesGrid"); grid.textContent = "";
-  for (const { f, members } of folderTiles) {
-    const t = el("button", "tile folderTile"); t.type = "button";
-    const cv = el("div", "cv folderCv");
-    for (const m of members.slice(0, 4)) {
-      const cell = el("div", "fc");
-      coverUrlFor(m, model.idx).then(u => { if (u) { const img = el("img"); img.alt = ""; img.loading = "lazy"; img.onerror = () => img.remove(); img.src = u; cell.append(img); } });
-      cv.append(cell);
-    }
-    const saved = members.reduce((a, m) => a + m.savedCount, 0);
-    if (saved) { const b = el("span", "badgeSaved"); b.textContent = String(saved); cv.append(b); }
-    t.append(cv, el("span", "tTitle", f.name), el("span", "tMeta", `フォルダ · ${members.length}作品`));
-    t.addEventListener("click", () => { openFolder = f.name; renderLibrary(false); scrollTo({ top: 0 }); });
-    grid.append(t);
-  }
-  $("libEmpty").classList.toggle("hidden", !!(list.length || folderTiles.length));
-  if (!list.length && !folderTiles.length) {
+  head.classList.toggle("hidden", !openGroup || !!filter);
+  if (openGroup) { $("folderName").textContent = openGroup.name; $("folderKind").textContent = openGroup.type === "series" ? "シリーズ" : "作者"; }
+  const list = $("seriesGrid"); list.textContent = "";
+  $("libEmpty").classList.toggle("hidden", !!groups.length);
+  if (!groups.length) {
     $("libEmpty").textContent = "";
-    $("libEmpty").append(el("b", "", filter ? "見つかりません" : "まだ本がありません"), document.createTextNode(filter ? "別の言葉でさがしてください。" : online ? "PCの D:\\epub にEPUBを置くか、＋から作品を追加してください。" : "PCにつながると、PCの本が並びます。"));
+    $("libEmpty").append(el("b", "", filter ? "見つかりません" : model.series.length ? `${CAT_LABEL[curCat]}はまだありません` : "まだ本がありません"),
+      document.createTextNode(filter ? "別の言葉でさがしてください。" : model.series.length ? "ほかのタブの本を長押しして、ここへ移せます。" : online ? "PCの D:\\epub にEPUBを置くか、＋から作品を追加してください。" : "PCにつながると、PCの本が並びます。"));
   }
   const frag = document.createDocumentFragment();
-  for (const s of list) {
-    const t = el("button", "tile" + (!online && s.pc && !s.savedCount ? " off" : "")); t.type = "button";
-    const cv = coverEl("", s.title, s.kind);
-    coverUrlFor(s, model.idx).then(u => { if (u) { const img = el("img"); img.alt = ""; img.loading = "lazy"; img.onload = () => cv.querySelector(".ph")?.remove(); img.onerror = () => img.remove(); img.src = u; cv.append(img); } });
-    if (s.savedCount) { const b = el("span", "badgeSaved"); if (s.savedCount === s.files.length) b.append(svgUse("i-check")); else b.textContent = `${s.savedCount}/${s.files.length}`; cv.append(b); }
-    if (s.lastRead?.pages) { const pr = el("span", "tProg"); const i = el("i"); i.style.width = `${Math.round((s.lastRead.page + 1) / s.lastRead.pages * 100)}%`; pr.append(i); cv.append(pr); }
-    t.append(cv, el("span", "tTitle", s.title), el("span", "tMeta", [s.site, `${s.files.length}冊`].filter(Boolean).join(" · ")));
-    t.addEventListener("click", () => openSeries(s));
-    frag.append(t);
+  for (const g of groups) {
+    let row;
+    if (g.type === "unit") {
+      const u = g.units[0];
+      const pct = u.lastRead?.pages ? Math.round((u.lastRead.page + 1) / u.lastRead.pages * 100) : null;
+      row = rowEl({ title: u.title, sub: unitSub(u, openGroup), meta: unitMeta(u), kind: u.kind, coverFor: u, off: !online && u.pc && !u.savedCount, pct: pct && pct < 100 ? pct : null, sel: selecting ? selecting.has(u.id) : null });
+      bindPress(row, () => selecting ? toggleSel([u.id]) : openUnit(u), () => openMeta([u.id], { unit: u }));
+    } else {
+      const ids = g.units.map(u => u.id);
+      const books = g.units.reduce((a, u) => a + u.files.length, 0);
+      const authors = [...new Set(g.units.map(u => metaOf(u.id).author).filter(Boolean))];
+      const sub = g.type === "series" ? [authors.join("・")].filter(Boolean).join("") : "作者";
+      row = rowEl({ title: g.name, sub: g.type === "series" ? (sub ? `シリーズ ・ ${sub}` : "シリーズ") : sub, meta: `${g.units.length}作品 ・ ${books}冊`, kind: g.units[0].kind, coverFor: g.units[0], stack: true,
+        sel: selecting ? ids.every(id => selecting.has(id)) : null });
+      bindPress(row, () => selecting ? toggleSel(ids) : (openGroup = { key: g.key, type: g.type, name: g.name }, renderLibrary(false), scrollTo({ top: 0 })), () => openMeta(ids, { group: g }));
+    }
+    frag.append(row);
   }
-  grid.append(frag);
+  list.append(frag);
+  renderSelBar();
 }
 $("libFilter").addEventListener("input", () => renderLibrary(false));
-$("folderBack").addEventListener("click", () => { openFolder = null; renderLibrary(false); });
+$("folderBack").addEventListener("click", () => { openGroup = null; renderLibrary(false); });
+async function openUnit(u) {
+  const idx = lastModel?.idx || await getSaved();
+  if (u.files.length === 1) {
+    const f = u.files[0];
+    if (idx[f.key]) return openBook(f.key);
+    if (online && u.pc) return prefs.stream ? openStream(u, f) : saveBook(u, f, true);
+  }
+  openSeries(u);
+}
 
-// ---------------- フォルダ（シリーズ物・外伝などを1か所にまとめる。GitHubで端末どうし同期） ----------------
-let openFolder = null;
-let foldersCache = null;
-async function getFolders() {
-  if (!foldersCache) foldersCache = await kvGet("folders", null) || { at: 0, list: [] };
-  return foldersCache;
+// ---- 複数選ぶ ----
+function toggleSel(ids) {
+  if (!selecting) return;
+  const all = ids.every(id => selecting.has(id));
+  ids.forEach(id => all ? selecting.delete(id) : selecting.add(id));
+  renderLibrary(false);
 }
-async function saveFolders(fl) {
-  fl.list = fl.list.filter(f => f.ids.length);
-  fl.at = Date.now(); foldersCache = fl; await kvSet("folders", fl);
-  if (gistOn()) { gistFoldersDirty = true; clearTimeout(saveFolders.t); saveFolders.t = setTimeout(() => gistSyncProgress().catch(() => {}), 3000); }
+function renderSelBar() {
+  const bar = $("selBar");
+  bar.classList.toggle("hidden", !selecting);
+  $("dock").classList.toggle("hide", !!selecting);
+  if (selecting) $("selCount").textContent = `${selecting.size}件を選択中`;
+  $("selApply").disabled = !selecting?.size;
 }
-let gistFoldersDirty = false;
-async function setSeriesFolder(seriesId, name) {
-  const fl = await getFolders();
-  for (const f of fl.list) f.ids = f.ids.filter(x => x !== seriesId);
-  if (name) {
-    let f = fl.list.find(x => x.name === name);
-    if (!f) { f = { name, ids: [] }; fl.list.push(f); }
-    f.ids.push(seriesId);
+$("selCancel").addEventListener("click", () => { selecting = null; renderLibrary(false); });
+$("selAll").addEventListener("click", () => {
+  if (!selecting || !lastModel) return;
+  lastModel.series.filter(u => catOf(u) === curCat).forEach(u => selecting.add(u.id)); renderLibrary(false);
+});
+$("selApply").addEventListener("click", () => { if (selecting?.size) openMeta([...selecting], { bulk: true }); });
+
+// ---- 分類シート（長押しで出る） ----
+let metaCtx = null; // { ids, unit?, group?, bulk? }
+async function openMeta(ids, ctx = {}) {
+  await getLibMeta();
+  closeSheets(true);
+  metaCtx = { ids, ...ctx };
+  const metas = ids.map(metaOf);
+  const same = f => { const v = metas.map(m => m[f] || ""); return v.every(x => x === v[0]) ? v[0] : null; };
+  const title = ctx.unit ? ctx.unit.title : ctx.group ? ctx.group.name : `${ids.length}件`;
+  $("msTitle").textContent = title;
+  $("msSub").textContent = ctx.unit ? [ctx.unit.site, `${ctx.unit.files.length}冊`].filter(Boolean).join(" ・ ") : ctx.group ? `${ctx.group.type === "series" ? "シリーズ" : "作者"} ・ ${ids.length}作品` : "まとめて変更します";
+  const cat = same("cat");
+  $("msCat").querySelectorAll("button").forEach(b => b.classList.toggle("on", (cat ?? "-") === (b.dataset.v === "none" ? "" : b.dataset.v)));
+  let ser = same("series"), au = same("author");
+  if (ctx.group?.type === "series") ser = ctx.group.name;   // まとめて名前を変えられるように
+  if (ctx.group?.type === "author") au = ctx.group.name;
+  $("msSeries").value = ser ?? ""; $("msSeries").placeholder = ser === null ? "（作品ごとに違います）" : "なし（シリーズにしない）";
+  $("msAuthor").value = au ?? ""; $("msAuthor").placeholder = au === null ? "（作品ごとに違います）" : "なし";
+  metaCtx.orig = { series: $("msSeries").value, author: $("msAuthor").value };
+  // 入力候補
+  const all = Object.values(libMeta.entries);
+  const fill = (id, f) => { const dl = $(id); dl.textContent = ""; [...new Set(all.map(m => m[f]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja")).slice(0, 200).forEach(v => { const o = el("option"); o.value = v; dl.append(o); }); };
+  fill("dlSeries", "series"); fill("dlAuthor", "author");
+  // 操作
+  const acts = $("msActs"); acts.textContent = "";
+  const act = (text, fn, cls = "") => { const b = el("button", "btn small " + cls, text); b.type = "button"; b.addEventListener("click", fn); acts.append(b); };
+  if (ctx.unit) {
+    act(ctx.unit.files.length > 1 ? "巻の一覧" : "詳細", async () => { await applyMetaFields(); closeSheets(true); openSeries(ctx.unit); });
+    if (ctx.unit.files.length === 1 && ctx.unit.pc) {
+      const f = ctx.unit.files[0]; const idx = await getSaved();
+      if (idx[f.key]) act("端末から削除", async () => { if (!confirm(`「${f.name}」をこの端末から削除しますか？\n（PCのファイルは消えません）`)) return; await removeLocal(f.key); closeSheets(); renderLibrary(false); toast("端末から削除しました"); });
+      else act("端末に保存", () => { closeSheets(); saveBook(ctx.unit, f, false); toast("保存を始めました"); });
+    }
   }
-  await saveFolders(fl);
+  if (ctx.group) act("開く", async () => { await applyMetaFields(); closeSheets(true); openGroup = { key: ctx.group.key, type: ctx.group.type, name: ctx.group.name }; renderLibrary(false); });
+  if (!ctx.bulk) act("複数選ぶ", async () => { await applyMetaFields(); closeSheets(true); selecting = new Set(ids); renderLibrary(false); });
+  openSheet("metaSheet");
 }
-async function renderFolderPicker() {
-  const s = sheetSeries; if (!s) return;
-  const box = $("ssFolders"); box.textContent = "";
-  const fl = await getFolders();
-  const cur = fl.list.find(f => f.ids.includes(s.id))?.name || "";
-  for (const f of fl.list) {
-    const c = el("button", "chip" + (f.name === cur ? " on" : ""), f.name); c.type = "button";
-    c.addEventListener("click", async () => { await setSeriesFolder(s.id, f.name === cur ? "" : f.name); renderFolderPicker(); renderLibrary(false); toast(f.name === cur ? "フォルダから出しました" : `「${f.name}」に入れました`); });
-    box.append(c);
-  }
-  const inp = el("input"); inp.type = "text"; inp.placeholder = "＋ 新しいフォルダ名"; inp.className = "folderInput";
-  inp.addEventListener("keydown", async e => { if (e.key !== "Enter") return; const n = inp.value.trim().slice(0, 40); if (!n) return; await setSeriesFolder(s.id, n); renderFolderPicker(); renderLibrary(false); toast(`「${n}」に入れました`); });
-  const ok = el("button", "btn small", "作成"); ok.type = "button";
-  ok.addEventListener("click", () => inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })));
-  const row = el("div", "row"); row.append(inp, ok); box.append(row);
-  $("ssFolderBtn").textContent = cur ? `フォルダ: ${cur}` : "フォルダへ";
+$("msCat").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-v]"); if (!b || !metaCtx) return;
+  const v = b.dataset.v === "none" ? "" : b.dataset.v;
+  await setMeta(metaCtx.ids, { cat: v });
+  $("msCat").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  toast(`${metaCtx.ids.length > 1 ? `${metaCtx.ids.length}件を` : ""}「${CAT_LABEL[b.dataset.v]}」にしました`);
+  if (metaCtx.bulk) { selecting = null; }
+  closeSheets(); renderLibrary(false);
+});
+async function applyMetaFields() {
+  if (!metaCtx?.orig) return false;
+  const s = $("msSeries").value.trim(), a = $("msAuthor").value.trim();
+  const patch = {};
+  if (s !== metaCtx.orig.series) patch.series = s;
+  if (a !== metaCtx.orig.author) patch.author = a;
+  if (!Object.keys(patch).length) return false;
+  await setMeta(metaCtx.ids, patch);
+  metaCtx.orig = { series: s, author: a };
+  if (openGroup && patch.series !== undefined && openGroup.type === "series") openGroup = null;
+  return true;
 }
-$("ssFolderBtn").addEventListener("click", () => { $("ssFolders").classList.toggle("hidden"); renderFolderPicker(); });
+$("msSeriesClr").addEventListener("click", () => { $("msSeries").value = ""; $("msSeries").placeholder = "なし（シリーズにしない）"; });
+$("msAuthorClr").addEventListener("click", () => { $("msAuthor").value = ""; $("msAuthor").placeholder = "なし"; });
+["msSeries", "msAuthor"].forEach(id => $(id).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("msDone").click(); } }));
+$("msDone").addEventListener("click", async () => {
+  const changed = await applyMetaFields();
+  if (changed) toast("保存しました（ほかの端末にも同期します）");
+  if (metaCtx?.bulk) selecting = null;
+  closeSheets(); renderLibrary(false);
+});
 
 // ---------------- 作品の詳細シート ----------------
 let sheetSeries = null;
@@ -526,6 +704,7 @@ function openSheet(id) {
   document.body.style.overflow = "hidden";
 }
 function closeSheets() {
+  if (!$("metaSheet").classList.contains("hidden") && metaCtx) { const ctx = metaCtx; applyMetaFields().then(ch => { if (ch) { toast("保存しました（ほかの端末にも同期します）"); renderLibrary(false); } if (ctx.bulk) { selecting = null; renderLibrary(false); } }).catch(() => {}); metaCtx = null; }
   document.querySelectorAll(".sheet:not(.hidden)").forEach(sh => {
     sh.classList.add("closing");
     setTimeout(() => { sh.classList.add("hidden"); sh.classList.remove("closing"); }, 260);
@@ -593,14 +772,14 @@ function volLabel(name) {
 async function openSeries(s) {
   sheetSeries = s;
   const model = lastModel || await libraryModel();
-  $("ssShelf").textContent = [s.shelf, s.site].filter(Boolean).join(" · ");
+  await getLibMeta();
+  const sm = metaOf(s.id);
+  $("ssShelf").textContent = [CAT_LABEL[sm.cat || "none"], sm.series && sm.series !== s.title ? `シリーズ: ${sm.series}` : "", sm.author, s.site].filter(Boolean).join(" · ");
   $("ssTitle").textContent = s.title;
   const cvBox = $("ssCover"); cvBox.textContent = "";
   const cv = coverEl("", s.title, s.kind); cvBox.append(cv);
   coverUrlFor(s, model.idx).then(u => { if (u) { const img = el("img"); img.alt = ""; img.onload = () => cv.querySelector(".ph")?.remove(); img.src = u; cv.append(img); } });
-  $("ssFolders").classList.add("hidden");
   await renderSeriesList();
-  renderFolderPicker();
   openSheet("seriesSheet");
 }
 async function renderSeriesList() {
@@ -679,6 +858,7 @@ $("ssSaveAll").addEventListener("click", async () => {
   if (todo.length > 1 && !confirm(`${todo.length}冊（${fmtMB(total)}）をこの端末に保存します。よいですか？`)) return;
   for (const f of todo) { if (sheetSeries !== s) break; await saveBook(s, f, false); }
 });
+$("ssMetaBtn").addEventListener("click", () => { const s = sheetSeries; if (s) openMeta([s.id], { unit: s }); });
 $("ssDelAll").addEventListener("click", async () => {
   const s = sheetSeries; if (!s) return;
   const idx = await getSaved();
@@ -1101,8 +1281,10 @@ async function openWith(key, rec, getSrc, streaming = false) {
     }
     const textMode = book.kind === "text";
     $("stage").classList.toggle("textMode", textMode); $("textFrame").classList.toggle("hidden", !textMode);
-    ["rWm", "rFontDn", "rFontUp"].forEach(id => $(id).classList.toggle("hidden", !textMode));
+    $("rWm").classList.toggle("hidden", !textMode);
     ["rSpread", "rDir"].forEach(id => $(id).classList.toggle("hidden", textMode));
+    $("rPanel").classList.toggle("text", textMode); closePanel();
+    $("reader").style.background = textMode ? textColors().bg : mangaBg();
     if (textMode) {
       let d = 0, f = 0;
       if (best && best.d != null) { d = Math.min(book.docs.length - 1, best.d); f = best.f || 0; }
@@ -1172,7 +1354,37 @@ const next = () => go(1), prev = () => go(-1);
 
 // ---- 小説（文章EPUB）: iframeに1章ずつ出し、段組みでページに分ける ----
 const SERIF = `"Hiragino Mincho ProN","Yu Mincho","YuMincho","Noto Serif JP","Noto Serif CJK JP",serif`;
-function textColors() { return isDark() ? { bg: "#141518", fg: "#d9d9d6", link: "#9ab" } : { bg: "#f6f4ef", fg: "#1c1c1c", link: "#246" }; }
+const SANS = `"Hiragino Sans","Yu Gothic","YuGothic","Noto Sans JP","Noto Sans CJK JP",sans-serif`;
+// v0.24: 背景（ReadEraなどの一般的なリーダーを参考に）
+const TBG = {
+  auto: { name: "テーマ" },
+  white: { name: "白", bg: "#ffffff", fg: "#1b1b1b", link: "#245" },
+  paper: { name: "紙", bg: "#f6f4ef", fg: "#1c1c1c", link: "#246" },
+  beige: { name: "ベージュ", bg: "#f1e7d0", fg: "#3a3024", link: "#5a4320" },
+  sepia: { name: "セピア", bg: "#e6d3ad", fg: "#43331d", link: "#5b3d12" },
+  mint: { name: "ミント", bg: "#dfeadb", fg: "#1f2b20", link: "#24502e" },
+  gray: { name: "グレー", bg: "#3b3e44", fg: "#dadad6", link: "#a9c0d8" },
+  dark: { name: "ダーク", bg: "#141518", fg: "#d9d9d6", link: "#9ab" },
+  black: { name: "黒", bg: "#000000", fg: "#bdbdbb", link: "#8aa" }
+};
+// v0.24: フォント（Webフォントは使うときだけ読み込む。オフラインでは端末の明朝/ゴシック）
+const FONTS = {
+  book: { name: "本のまま", stack: "" },
+  mincho: { name: "明朝", stack: SERIF, gf: "Noto+Serif+JP:wght@400;600" },
+  shippori: { name: "しっぽり明朝", stack: `"Shippori Mincho",${SERIF}`, gf: "Shippori+Mincho:wght@400;600" },
+  udmincho: { name: "UD明朝", stack: `"BIZ UDPMincho",${SERIF}`, gf: "BIZ+UDPMincho:wght@400;700" },
+  gothic: { name: "ゴシック", stack: SANS, gf: "Noto+Sans+JP:wght@300;400;600" },
+  udgothic: { name: "UDゴシック", stack: `"BIZ UDPGothic",${SANS}`, gf: "BIZ+UDPGothic:wght@400;700" },
+  maru: { name: "丸ゴシック", stack: `"Zen Maru Gothic","Hiragino Maru Gothic ProN",${SANS}`, gf: "Zen+Maru+Gothic:wght@300;400;700" },
+  klee: { name: "手書き風", stack: `"Klee One",${SERIF}`, gf: "Klee+One:wght@400;600" }
+};
+const fontOf = () => FONTS[prefs.tfont] || FONTS.mincho;
+const gfUrl = (fams, text) => `https://fonts.googleapis.com/css2?${fams.map(f => "family=" + f).join("&")}&display=swap${text ? "&text=" + encodeURIComponent(text) : ""}`;
+function textColors() {
+  const t = TBG[prefs.tbg];
+  if (t?.bg) return t;
+  return isDark() ? TBG.dark : TBG.paper;
+}
 async function buildDocHtml(di) {
   const d = R.book.docs[di];
   const raw = await R.book.zip.text(d.href);
@@ -1192,6 +1404,8 @@ async function buildDocHtml(di) {
   }
   const head = doc.querySelector("head") || doc.documentElement.insertBefore(doc.createElementNS(doc.documentElement.namespaceURI, "head"), doc.documentElement.firstChild);
   const meta = doc.createElementNS(doc.documentElement.namespaceURI, "meta"); meta.setAttribute("charset", "utf-8"); head.prepend(meta);
+  const F = fontOf();
+  if (F.gf && navigator.onLine !== false) { const ln = doc.createElementNS(doc.documentElement.namespaceURI, "link"); ln.setAttribute("rel", "stylesheet"); ln.setAttribute("href", gfUrl([F.gf])); ln.setAttribute("id", "__rfont"); head.append(ln); }
   return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
 }
 function frameLoad(html) {
@@ -1202,9 +1416,9 @@ function frameLoad(html) {
     f.srcdoc = html;
   });
 }
-const PAD = () => Math.round(Math.min(innerWidth, innerHeight) * 0.06) + 8;
+const PAD = () => Math.round(Math.min(innerWidth, innerHeight) * 0.06 * (Number(prefs.tpad) || 1)) + 6;
 function textStyle(vertical, forced) {
-  const c = textColors(); const P = PAD();
+  const c = textColors(); const P = PAD(); const fam = fontOf().stack;
   const W = innerWidth, H = innerHeight;
   const wm = forced ? `html,body{writing-mode:${vertical ? "vertical-rl" : "horizontal-tb"}!important;-webkit-writing-mode:${vertical ? "vertical-rl" : "horizontal-tb"}!important}` : "";
   const cols = vertical
@@ -1213,7 +1427,10 @@ function textStyle(vertical, forced) {
   return `${wm}
 html{margin:0!important;padding:0!important;overflow:hidden!important;background:${c.bg}!important;color:${c.fg}!important;-webkit-text-size-adjust:100%!important}
 body{margin:0!important;padding:${P}px!important;box-sizing:border-box!important;column-fill:auto!important;background:transparent!important;color:inherit!important;
- font-family:${SERIF};font-size:${prefs.font}px!important;line-height:1.85!important;word-break:normal;line-break:strict;overflow-wrap:anywhere}
+ ${fam ? `font-family:${fam}!important;` : ""}font-size:${prefs.font}px!important;line-height:${Number(prefs.tlh) || 1.85}!important;font-weight:${prefs.tweight || 400};word-break:normal;line-break:strict;overflow-wrap:anywhere;${prefs.tjust ? "text-align:justify;text-justify:inter-character;" : ""}}
+${fam ? `p,div,span,li,dd,dt,blockquote,h1,h2,h3,h4,h5,h6,a,ruby,em,strong{font-family:${fam}!important}` : ""}
+${prefs.toverride ? `body *{color:inherit!important;font-family:inherit!important;background:transparent!important;line-height:inherit!important}` : ""}
+p{line-height:inherit}
 ${cols}
 body *{max-width:none}
 img,svg,video{max-width:${(vertical ? W : W) - 2 * P}px!important;max-height:${H - 2 * P}px!important;object-fit:contain;break-inside:avoid}
@@ -1241,6 +1458,10 @@ async function textLoad(di, where = {}) {
     R.vertical = vertical;
     const st = fd.createElement("style"); st.id = "__rstyle"; st.textContent = textStyle(vertical, prefs.wm !== "auto" || (vertical && !/vertical/.test(getComputedStyle(fd.documentElement).writingMode)));
     (fd.head || fd.documentElement).append(st);
+    // Webフォントは読み込みを待ってからページに分ける（途中で字の幅が変わると位置がずれる）
+    const fl = fd.getElementById("__rfont");
+    if (fl && !fl.sheet) await Promise.race([new Promise(r => { fl.addEventListener("load", r, { once: true }); fl.addEventListener("error", r, { once: true }); }), sleep(2500)]);
+    if (fl && fd.fonts?.load) { const fam = (fontOf().stack.match(/^"([^"]+)"/) || [])[1]; if (fam) await Promise.race([Promise.all([fd.fonts.load(`${prefs.font}px "${fam}"`, "あ永"), fd.fonts.load(`600 ${prefs.font}px "${fam}"`, "あ")]).catch(() => {}), sleep(3000)]); }
     await (fd.fonts?.ready || Promise.resolve());
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const imgs = [...fd.images].filter(i => !i.complete);
@@ -1251,7 +1472,8 @@ async function textLoad(di, where = {}) {
     else if (where.frac) pi = Math.min(R.pn - 1, Math.round(where.frac * R.pn));
     else if (where.page != null) pi = Math.min(R.pn - 1, where.page);
     textShow(pi);
-    $("rWm").textContent = { auto: "書き方向: 本のまま", vertical: "縦書き", horizontal: "横書き" }[prefs.wm];
+    $("rWm").textContent = { auto: "本のまま", vertical: "縦書き", horizontal: "横書き" }[prefs.wm];
+    $("textFrame").style.background = textColors().bg; $("reader").style.background = textColors().bg;
     $("rSlider").classList.toggle("ltr", !(vertical || R.book.rtl));
   } finally { R.loading = false; }
 }
@@ -1315,7 +1537,64 @@ function closeReader() {
   if (currentView === "library") renderLibrary(false); else if (currentView === "continue") renderContinue();
   if (gistProgressDirty) gistSyncProgress().catch(() => {});
 }
-function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rBottom").classList.toggle("hidden", !on); }
+function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rBottom").classList.toggle("hidden", !on); if (!on) closePanel(); }
+function mangaBg() { return prefs.mbg === "black" ? "#000" : prefs.mbg === "white" ? "#fff" : ""; }
+
+// ---- v0.24: 表示の設定パネル ----
+function closePanel() { $("rPanel").classList.add("hidden"); $("rAa").setAttribute("aria-expanded", "false"); $("rAa").classList.remove("on"); }
+let fontSampleLoaded = false;
+function openPanel() {
+  if (!fontSampleLoaded) {
+    fontSampleLoaded = true;
+    const fams = Object.values(FONTS).map(f => f.gf).filter(Boolean);
+    const ln = document.createElement("link"); ln.rel = "stylesheet"; ln.href = gfUrl(fams, "あ永字の明朝ゴシックUD丸手書き風しっぽり本まで"); document.head.append(ln);
+  }
+  renderPanel(); $("rPanel").classList.remove("hidden"); $("rAa").setAttribute("aria-expanded", "true"); $("rAa").classList.add("on");
+}
+function renderPanel() {
+  const bg = $("rpBg"); bg.textContent = "";
+  for (const [k, t] of Object.entries(TBG)) {
+    const b = el("button", "sw" + (prefs.tbg === k ? " on" : "")); b.type = "button"; b.title = t.name; b.dataset.v = k;
+    const c = t.bg ? t : (isDark() ? TBG.dark : TBG.paper);
+    const dot = el("span", "", k === "auto" ? "自" : "あ");
+    dot.style.background = k === "auto" ? `linear-gradient(135deg, ${TBG.paper.bg} 50%, ${TBG.dark.bg} 50%)` : c.bg; dot.style.color = k === "auto" ? "#888" : c.fg;
+    b.append(dot, el("small", "", t.name));
+    bg.append(b);
+  }
+  const fl = $("rpFont"); fl.textContent = "";
+  for (const [k, f] of Object.entries(FONTS)) {
+    const b = el("button", "fontBtn" + (prefs.tfont === k ? " on" : "")); b.type = "button"; b.dataset.v = k;
+    const sample = el("span", "fs", k === "book" ? "本" : "あ永"); if (f.stack) sample.style.fontFamily = f.stack;
+    b.append(sample, el("small", "", f.name)); fl.append(b);
+  }
+  $("rpSize").value = String(prefs.font); $("rpSizeV").textContent = `${prefs.font}px`;
+  $("rpLh").value = String(prefs.tlh); $("rpLhV").textContent = Number(prefs.tlh).toFixed(2);
+  $("rpPad").value = String(prefs.tpad); $("rpPadV").textContent = `${Math.round(prefs.tpad * 100)}%`;
+  $("rpJustify").checked = !!prefs.tjust; $("rpOverride").checked = !!prefs.toverride;
+  const segOn = (id, v) => $(id).querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
+  segOn("rpWm", prefs.wm); segOn("rpWeight", prefs.tweight); segOn("rpSpread", prefs.spread); segOn("rpDir", prefs.dir); segOn("rpMbg", prefs.mbg); segOn("rpTap", prefs.tap);
+}
+let panelTimer = null;
+function applyPanel(kind = "text", delay = 0) {
+  renderPanel(); renderSegs();
+  if (!R.book) return;
+  clearTimeout(panelTimer);
+  panelTimer = setTimeout(() => {
+    if (!R.book) return;
+    if (R.book.kind === "text") { if (kind === "text") textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); }
+    else { $("reader").style.background = mangaBg(); if (kind === "manga") layout(R.page); }
+  }, delay);
+}
+$("rAa").addEventListener("click", () => $("rPanel").classList.contains("hidden") ? openPanel() : closePanel());
+$("rpBg").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref("tbg", b.dataset.v); applyPanel("text"); });
+$("rpFont").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref("tfont", b.dataset.v); applyPanel("text"); });
+$("rpSize").addEventListener("input", () => { setPref("font", Number($("rpSize").value)); applyPanel("text", 260); });
+$("rpLh").addEventListener("input", () => { setPref("tlh", Number($("rpLh").value)); applyPanel("text", 260); });
+$("rpPad").addEventListener("input", () => { setPref("tpad", Number($("rpPad").value)); applyPanel("text", 260); });
+$("rpJustify").addEventListener("change", () => { setPref("tjust", $("rpJustify").checked); applyPanel("text"); });
+$("rpOverride").addEventListener("change", () => { setPref("toverride", $("rpOverride").checked); applyPanel("text"); });
+const panelSeg = (id, key, kind) => $(id).addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref(key, b.dataset.v); applyPanel(kind); });
+panelSeg("rpWm", "wm", "text"); panelSeg("rpWeight", "tweight", "text"); panelSeg("rpSpread", "spread", "manga"); panelSeg("rpDir", "dir", "manga"); panelSeg("rpMbg", "mbg", "mangaBg"); panelSeg("rpTap", "tap", "none");
 
 // 操作: タップ（既定: 左で次へ／中央でメニュー）、スワイプ、キー、ホイール
 (function bindReader() {
@@ -1325,6 +1604,7 @@ function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rB
   tl.addEventListener("pointermove", e => { if (down && (Math.abs(e.clientX - sx) > 12 || Math.abs(e.clientY - sy) > 12)) moved = true; });
   tl.addEventListener("pointerup", e => {
     if (!down || !R.book) return; down = false;
+    if (!$("rPanel").classList.contains("hidden")) { closePanel(); return; }
     const dx = e.clientX - sx, dy = e.clientY - sy;
     if (moved && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
       // 指を右へ動かす（左から右へめくる）と次へ ＝ 左タップで次へ と同じ向き
@@ -1361,8 +1641,6 @@ function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rB
   $("rSpread").addEventListener("click", () => { setPref("spread", { auto: "on", on: "off", off: "auto" }[prefs.spread]); layout(R.page); });
   $("rDir").addEventListener("click", () => { setPref("dir", prefs.dir === "rtl" ? "ltr" : "rtl"); layout(R.page); });
   $("rWm").addEventListener("click", () => { setPref("wm", { auto: "vertical", vertical: "horizontal", horizontal: "auto" }[prefs.wm]); textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); });
-  const font = d => { setPref("font", Math.max(14, Math.min(30, prefs.font + d))); textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); };
-  $("rFontDn").addEventListener("click", () => font(-1)); $("rFontUp").addEventListener("click", () => font(1));
   $("rFull").addEventListener("click", () => { if (document.fullscreenElement) document.exitFullscreen?.(); else (document.documentElement.requestFullscreen?.() || Promise.reject()).catch(() => toast("このブラウザは全画面に対応していません（iPadはホーム画面から開くと全画面）")); });
   let rt = null;
   addEventListener("resize", () => {
@@ -1380,7 +1658,8 @@ function openAdd(url = "") {
   if (url) $("addUrl").value = url;
   if (!addDefaultsDone && serverInfo) { $("addDrive").checked = !!serverInfo.deliverDefaultDrive; $("addKindle").checked = !!serverInfo.deliverDefaultKindle; addDefaultsDone = true; }
   $("addMsg").textContent = "";
-  updateAddState();
+  updateAddState(); renderModeSeg();
+  if (online || gistOn()) loadSiteModes().then(renderModeSeg).catch(() => {});
   openSheet("addSheet");
   if (!url && !$("addUrl").value) setTimeout(() => $("addUrl").focus(), 350);
 }
@@ -1396,7 +1675,40 @@ function updateAddState() {
 $("pasteBtn").addEventListener("click", async () => { const u = await readClipboardUrl(); if (u) { $("addUrl").value = u; resetPick(); } });
 $("addUrl").addEventListener("input", () => { if (pick && extractUrl($("addUrl").value) !== pick.url) resetPick(); });
 $("reqAdd").addEventListener("click", () => openAdd());
-$("modeSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (!b || b.disabled) return; });
+// v0.24: サイトの型（自動=登録どおり）
+let addMode = "";
+const MODE_NAME = { normal: "ふつう", twostep: "2段階", gallery: "画像ページ型" };
+const MODE_HINT = { "": "サイトごとに登録した型を使います（登録が無ければふつう）。", normal: "一覧ページに各話へのリンクが並ぶサイト。", twostep: "話を開いたあと「チャプターを見る」などのボタンで画像が出るサイト。作品ページから順に押して開きます。", gallery: "作品ページの小さい画像を押すと大きい画像のページになるサイト。全ページを1冊にします。" };
+function renderModeSeg() {
+  $("modeSeg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === addMode));
+  $("rememberRow").classList.toggle("hidden", !addMode);
+  let hint = MODE_HINT[addMode] || "";
+  const o = originOf(extractUrl($("addUrl").value));
+  const reg = o && siteModesCache[o]?.mode;
+  if (!addMode && o) hint = reg ? `このサイトは「${MODE_NAME[reg]}」で登録されています。` : "このサイトは未登録です（ふつうとして読みます）。";
+  else if (addMode && reg && reg !== addMode) hint += `（登録は「${MODE_NAME[reg]}」）`;
+  $("modeHint").textContent = hint;
+}
+$("modeSeg").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b || b.disabled) return; addMode = b.dataset.v; if (pick) resetPick(); renderModeSeg(); });
+$("addUrl").addEventListener("input", () => renderModeSeg());
+// v0.24: 小数話（13.1話など）
+let decMode = LS.get("decimalMode", "default");
+function applyDecMode() {
+  if (!pick) return;
+  pick.decimalMode = decMode;
+  for (const x of pick.items) {
+    if (!x.decimal || x.saved || x.completed || x.rule) continue;
+    const off = decMode === "all" ? false : decMode === "integer" ? true : x.decimal === 2;
+    x.unchecked = off; x.sel = !off;
+    x.reason = off ? (decMode === "integer" ? "整数話だけの設定です" : "同じ番号の整数話があるので外しました") : "";
+  }
+}
+$("decSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  decMode = b.dataset.v; LS.set("decimalMode", decMode);
+  $("decSeg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  applyDecMode(); if (pick) renderPick();
+});
 function resetPick() { pick = null; $("pickBox").classList.add("hidden"); updateAddState(); }
 const keyTuple = k => { const m = String(k || "").match(/^(\d+)(?:\.(\d+))?$/); return m ? [Number(m[1]), m[2] ? Number(m[2]) : -1] : null; };
 const keyCmp = (a, b) => a[0] - b[0] || a[1] - b[1];
@@ -1420,7 +1732,7 @@ $("previewBtn").addEventListener("click", async () => {
   $("previewBtn").disabled = true;
   $("addMsg").textContent = "PCのFirefoxが一覧ページを読んでいます…（数十秒かかることがあります）";
   try {
-    const r = await api("/api/preview", { method: "POST", body: { url, device: deviceName } });
+    const r = await api("/api/preview", { method: "POST", body: { url, device: deviceName, ...(addMode ? { siteMode: addMode } : {}), decimalMode: decMode } });
     const id = r.id; const t0 = Date.now();
     stopPreviewPoll();
     const poll = async () => {
@@ -1429,7 +1741,10 @@ $("previewBtn").addEventListener("click", async () => {
         const it = g.item || {};
         if (it.status === "done" && it.list) {
           const L = it.list;
-          pick = { url, title: L.title || "", items: mergeByChapter((L.links || []).map(x => ({ ...x, sel: !x.saved && !x.completed && !x.unchecked }))) };
+          pick = { url, title: L.title || "", gallery: !!L.gallery, items: mergeByChapter((L.links || []).map(x => ({ ...x, sel: !x.saved && !x.completed && !x.unchecked }))) };
+          applyDecMode();
+          $("decRow").classList.toggle("hidden", !pick.items.some(x => x.decimal));
+          $("decSeg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === decMode));
           $("pickTitle").value = pick.title;
           renderPick(); $("pickBox").classList.remove("hidden");
           $("addMsg").textContent = [L.orderNote, L.ruleHidden ? `ルールで${L.ruleHidden}件を非表示` : ""].filter(Boolean).join(" ・ ");
@@ -1450,7 +1765,7 @@ function renderPick() {
   let no = 0;
   const items = pick.items;
   const nNew = items.filter(x => !x.saved && !x.completed).length;
-  $("pickStats").textContent = `全${items.length}話 ・ 新しい話 ${nNew} ・ 保存済み ${items.length - nNew}`;
+  $("pickStats").textContent = pick.gallery ? `全${items.length}ページ（画像ページ型・1冊にします）` : `全${items.length}話 ・ 新しい話 ${nNew} ・ 保存済み ${items.length - nNew}`;
   items.forEach((x, i) => {
     const li = el("li", "pk" + (x.sel ? "" : " off"));
     const cb = el("input"); cb.type = "checkbox"; cb.checked = !!x.sel; cb.disabled = !!x.completed; cb.setAttribute("aria-label", x.label);
@@ -1461,7 +1776,8 @@ function renderPick() {
     const b = el("b");
     if (x.completed) b.append(el("span", "tag", "完結"));
     else if (x.saved) b.append(el("span", "tag", x.savedBy === "epub" ? "EPUB済" : "済"));
-    else if (x.unchecked) { const t = el("span", "tag warn", "外"); t.title = x.reason || ""; b.append(t); }
+    else if (x.unchecked) { const t = el("span", "tag warn", x.decimal && !x.rule ? "小数" : "外"); t.title = x.reason || ""; b.append(t); }
+    else if (x.decimal) b.append(el("span", "tag new", "小数"));
     else b.append(el("span", "tag new", "新"));
     const no2 = x.chapterKey && !String(x.label || "").includes(`${x.chapterKey}話`) ? `第${x.chapterKey}話 ` : "";
     b.append(document.createTextNode(no2 + (x.label || x.url)));
@@ -1484,7 +1800,10 @@ document.querySelectorAll("[data-sel]").forEach(b => b.addEventListener("click",
 $("addSubmit").addEventListener("click", async () => {
   const url = extractUrl($("addUrl").value);
   if (!url) { $("addMsg").textContent = "URLが見つかりません"; return; }
-  const body = { url, deliver: { drive: $("addDrive").checked, kindle: $("addKindle").checked }, device: deviceName, mode: "list" };
+  const body = { url, deliver: { drive: $("addDrive").checked, kindle: $("addKindle").checked }, device: deviceName, decimalMode: decMode };
+  if (addMode) { body.siteMode = addMode; body.rememberMode = $("rememberMode").checked; }
+  const cu = $("addCoverUrl").value.trim();
+  if (cu) { if (!/^https?:\/\//i.test(cu)) { $("addMsg").textContent = "表紙の画像URLは https:// で始まるURLにしてください"; return; } body.coverUrl = cu; }
   if (pick && pick.url === url) {
     body.selection = pick.items.filter(x => x.sel).map(x => ({ url: x.url, label: x.label, chapterKey: x.chapterKey || "" }));
     const t = $("pickTitle").value.trim(); if (t && t !== pick.title) body.title = t;
@@ -1499,7 +1818,8 @@ $("addSubmit").addEventListener("click", async () => {
       const r = await api("/api/submit", { method: "POST", body });
       toast(r.duplicate ? "同じURLがすでに処理待ちです" : r.updated ? "処理待ちの依頼を、選んだ話で置き換えました" : "PCへ送りました");
     }
-    $("addUrl").value = ""; resetPick(); closeSheets(); showView("requests");
+    if (body.siteMode && body.rememberMode) setSiteModeRemote(originOf(url), body.siteMode).catch(() => {});
+    $("addUrl").value = ""; $("addCoverUrl").value = ""; resetPick(); closeSheets(); showView("requests");
   } catch (e) {
     if (e.offline || !online || e.name === "AbortError" || e instanceof TypeError) {
       const pend = await kvGet("pending", []); pend.push({ ...body, at: Date.now() }); await kvSet("pending", pend);
@@ -1540,6 +1860,8 @@ async function loadRequests() {
     for (const it of r.items || []) {
       const li = el("li", "glass");
       const t = el("div", "t"); t.append(el("span", "st " + it.status, ST[it.status] || it.status), el("span", "", it.seriesTitle || it.url));
+      if (it.position) t.firstChild.textContent = `待ち ${it.position}番目`;
+      if (it.siteMode) t.append(el("span", "tag", MODE_NAME[it.siteMode] || it.siteMode));
       li.append(t, el("div", "m", `${it.message || ""}${it.selectionCount && !String(it.message || "").includes("話を指定") ? ` ・ ${it.selectionCount}話を指定` : ""} ・ ${new Date(((it.updatedAt || it.createdAt) || 0) * 1000).toLocaleString("ja-JP")}`));
       ul.append(li);
       if (["queued", "taken", "running"].includes(it.status)) running = true;
@@ -1567,7 +1889,7 @@ function renderSegs() {
   $("prefFont").value = String(prefs.font); $("fontSizeVal").textContent = `${prefs.font}px`;
 }
 function renderSettings() {
-  renderConn(); renderSegs();
+  renderConn(); renderSegs(); loadSiteModes().then(renderSiteModes).catch(() => renderSiteModes());
   $("tokenInput").value = "";
   $("appVersion").textContent = `ℜ Reader v${APP_VERSION}${serverInfo ? ` ／ PC helper v${serverInfo.version}` : ""}`;
   renderStorageInfo();
@@ -1605,6 +1927,60 @@ $("clearAll").addEventListener("click", async () => {
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (prefs.theme === "auto") updateThemeTile(); });
 
+// ---------------- v0.24: サイトの型（PCの拡張機能と共通の表。PC・GitHubどちらか経由で同期） ----------------
+let siteModesCache = {};
+function originOf(text) {
+  let t = String(text || "").trim(); if (!t) return "";
+  if (!/^https?:\/\//i.test(t)) t = "https://" + t;
+  try { return new URL(t).origin.toLowerCase(); } catch (_) { return ""; }
+}
+function mergeSiteModes(inc) {
+  let n = 0;
+  for (const [k, v] of Object.entries(inc || {})) {
+    if (!v || typeof v !== "object" || !/^https?:\/\//.test(k)) continue;
+    if (Number(v.t || 0) > Number(siteModesCache[k]?.t || 0)) { siteModesCache[k] = { mode: String(v.mode || ""), t: Number(v.t) || 0 }; n++; }
+  }
+  return n;
+}
+async function loadSiteModes() {
+  if (online) { try { const r = await api("/api/site-modes", { method: "POST", body: { entries: siteModesCache }, timeout: 6000 }); mergeSiteModes(r.entries); } catch (_) {} }
+  else if (gistOn()) { gistSyncProgress.quiet = true; try { await gistSyncProgress(); } catch (_) {} finally { gistSyncProgress.quiet = false; } }
+  await kvSet("siteModes", siteModesCache);
+}
+async function setSiteModeRemote(origin, mode) {
+  if (!origin) throw new Error("サイトのURLが正しくありません");
+  siteModesCache[origin] = { mode, t: Date.now() };
+  await kvSet("siteModes", siteModesCache);
+  if (online) await api("/api/site-modes", { method: "POST", body: { entries: { [origin]: siteModesCache[origin] } }, timeout: 6000 });
+  else if (gistOn()) await gistSyncProgress();
+  else toast("PCかGitHubにつながったら反映します");
+}
+function renderSiteModes() {
+  const box = $("siteModesList"); box.textContent = "";
+  const items = Object.entries(siteModesCache).filter(([, v]) => v.mode).map(([o, v]) => ({ o, host: o.replace(/^https?:\/\//, ""), mode: v.mode })).sort((a, b) => a.host.localeCompare(b.host));
+  box.classList.toggle("muted", !items.length);
+  if (!items.length) { box.textContent = online || gistOn() ? "登録したサイトはまだありません。PCの拡張機能で型を選ぶか、ここで登録できます。" : "PCかGitHubにつながると表示されます"; return; }
+  for (const mode of ["normal", "twostep", "gallery"]) {
+    const mine = items.filter(x => x.mode === mode); if (!mine.length) continue;
+    const g = el("div", "smGroup"); g.append(el("div", "smHead", `${MODE_NAME[mode]}（${mine.length}）`));
+    for (const it of mine) {
+      const row = el("div", "smRow");
+      const seg = el("div", "seg");
+      for (const m of ["normal", "twostep", "gallery"]) { const b = el("button", m === it.mode ? "on" : "", { normal: "ふつう", twostep: "2段階", gallery: "画像" }[m]); b.type = "button"; b.addEventListener("click", () => setSiteModeRemote(it.o, m).then(renderSiteModes).catch(e => toast(e.message))); seg.append(b); }
+      const del = el("button", "iconBtn"); del.type = "button"; del.setAttribute("aria-label", "登録を外す"); del.append(svgUse("i-x"));
+      del.addEventListener("click", () => setSiteModeRemote(it.o, "").then(renderSiteModes).catch(e => toast(e.message)));
+      row.append(el("span", "smHost", it.host), seg, del); g.append(row);
+    }
+    box.append(g);
+  }
+}
+let smNew = "normal";
+$("smNew").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; smNew = b.dataset.v; $("smNew").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); });
+$("smAdd").addEventListener("click", async () => {
+  const o = originOf($("smHost").value); if (!o) { toast("サイトのURLかドメインを入れてください"); return; }
+  try { await setSiteModeRemote(o, smNew); $("smHost").value = ""; renderSiteModes(); toast(`${o.replace(/^https?:\/\//, "")} を「${MODE_NAME[smNew]}」で登録しました`); } catch (e) { toast(e.message || String(e)); }
+});
+
 // ---------------- v0.23: スマホ連携（QR）をアプリが開いている最中でも取り込む ----------------
 async function pairNow(text) {
   if (!applyPairing(text)) return false;
@@ -1623,7 +1999,7 @@ addEventListener("hashchange", () => { if (location.hash.length > 1) pairNow(loc
 // ---------------- v0.23: 下に引っ張って更新（アプリ/ホーム画面版。本を読んでいる間は無効） ----------------
 async function refreshCurrentView() {
   await checkServer();
-  if (currentView === "library") { if (online) await loadPcLibrary(true); await renderLibrary(false); }
+  if (currentView === "library") { if (online) await loadPcLibrary(true); await syncLibMeta().catch(() => {}); await renderLibrary(false); }
   else if (currentView === "continue") { if (gistOn()) await gistSyncProgress().catch(() => {}); if (online) await syncAllProgress().catch(() => {}); await renderContinue(); }
   else if (currentView === "requests") await loadRequests();
   else renderSettings();
@@ -1667,7 +2043,8 @@ window.__sidBack = () => {
   if (!$("reader").classList.contains("hidden")) { closeReader(); return true; }
   if (document.querySelector(".sheet:not(.hidden)")) { closeSheets(); return true; }
   if ($("dock").classList.contains("open")) { closeFab(); return true; }
-  if (openFolder) { openFolder = null; renderLibrary(false); return true; }
+  if (selecting) { selecting = null; renderLibrary(false); return true; }
+  if (openGroup) { openGroup = null; renderLibrary(false); return true; }
   if (currentView !== "library") { showView("library"); return true; }
   return false;
 };
@@ -1679,6 +2056,8 @@ window.__sidBack = () => {
   const params = new URLSearchParams(location.search);
   const shared = extractUrl(params.get("url") || "") || extractUrl(params.get("text") || "") || extractUrl(params.get("title") || "");
   pcLibrary = await kvGet("pcLibrary", null);
+  siteModesCache = await kvGet("siteModes", {}) || {};
+  await getLibMeta().catch(() => {});
   await reconcileSaved().catch(() => {});
   showView(LS.get("view", "library") === "settings" ? "library" : (LS.get("view", "library") || "library"));
   requestAnimationFrame(moveIndicator);
@@ -1687,6 +2066,8 @@ window.__sidBack = () => {
   if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => gistSyncProgress().catch(() => {}), 120000); }
   if (shared) { history.replaceState(null, "", location.pathname); openAdd(shared); }
   if (online) { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); syncAllProgress(); }
+  syncLibMeta().catch(() => {});
+  if (online) loadSiteModes().catch(() => {});
   schedulePcCheck();
   addEventListener("online", () => pcCheckNow());
   addEventListener("focus", () => pcCheckNow());
