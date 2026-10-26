@@ -41,6 +41,8 @@
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 14 6-6 6 6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-aa" viewBox="0 0 24 24"><path d="M3 18.5 8 5.5h1.6l5 13M4.9 14h7.8" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 11.2c-2.2 0-3.4 1.2-3.4 2.9 0 1.6 1.1 2.6 2.7 2.6 1.1 0 1.9-.5 2.5-1.3v1.1M21 11.4v7" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/></symbol>
+      <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.3V4.8c0-.7.6-1.3 1.3-1.3h7.5l8.2 8.2a1.3 1.3 0 0 1 0 1.8l-7.3 7.3a1.3 1.3 0 0 1-1.8 0z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/><circle cx="8.2" cy="8.2" r="1.6" fill="currentColor"/></symbol>
       <symbol id="i-dn" viewBox="0 0 24 24"><path d="m6 10 6 6 6-6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     </defs>
   </svg>
@@ -55,9 +57,9 @@
   <main id="views">
     <section id="view-library" class="view">
       <div id="libNotice" class="notice hidden"></div>
-      <div class="chips" id="shelfChips" role="tablist" aria-label="棚"></div>
-      <div id="folderHead" class="folderHead hidden"><button id="folderBack" class="btn small" type="button"><svg><use href="#i-back"/></svg>本棚</button><b id="folderName"></b></div>
-      <div id="seriesGrid" class="seriesGrid"></div>
+      <div class="catTabs glass" id="shelfChips" role="tablist" aria-label="カテゴリ"></div>
+      <div id="folderHead" class="folderHead hidden"><button id="folderBack" class="btn small" type="button"><svg><use href="#i-back"/></svg>戻る</button><div class="fhText"><small id="folderKind"></small><b id="folderName"></b></div></div>
+      <div id="seriesGrid" class="libList"></div>
       <div id="libEmpty" class="empty hidden"></div>
     </section>
 
@@ -92,12 +94,21 @@
         <label class="setRow"><span>保存しないで読む<small>本をタップするとPCから直接開きます（保存は ↓ ボタン）。PCがオフのときは保存した本だけ</small></span><input id="prefStream" type="checkbox" class="toggle"></label>
         <label class="setRow"><span>見開きでも表紙は1枚で</span><input id="prefCoverSingle" type="checkbox" class="toggle"></label>
         <div class="setRow"><span>小説の書き方向</span><div class="seg" data-pref="wm"><button data-v="auto" type="button">本のまま</button><button data-v="vertical" type="button">縦書き</button><button data-v="horizontal" type="button">横書き</button></div></div>
-        <label class="setRow"><span>小説の文字の大きさ <b id="fontSizeVal"></b></span><input id="prefFont" type="range" min="14" max="30" step="1"></label>
+        <label class="setRow"><span>小説の文字の大きさ <b id="fontSizeVal"></b><small>背景・フォント・行間などは、本を開いて下の「表示」から</small></span><input id="prefFont" type="range" min="12" max="36" step="1"></label>
+      </div>
+      <h2 class="h">サイトの型（PCと共通）</h2>
+      <div class="card" id="siteModesCard">
+        <div id="siteModesList" class="siteModesList muted small">PCかGitHubにつながると表示されます</div>
+        <div class="row smAdd">
+          <input id="smHost" type="text" class="folderInput" placeholder="example.com" autocomplete="off" spellcheck="false">
+          <div class="seg" id="smNew"><button data-v="normal" type="button" class="on">ふつう</button><button data-v="twostep" type="button">2段階</button><button data-v="gallery" type="button">画像</button></div>
+          <button id="smAdd" class="btn small" type="button">登録</button>
+        </div>
       </div>
       <h2 class="h">表示と同期</h2>
       <div class="card">
         <div class="setRow"><span>テーマ</span><div class="seg" data-pref="theme"><button data-v="auto" type="button">自動</button><button data-v="light" type="button">ライト</button><button data-v="dark" type="button">ダーク</button></div></div>
-        <label class="setRow"><span>読んだ位置をほかの端末と同期<small>GitHub（PCを通さない）と、つながっていればPC</small></span><input id="prefSync" type="checkbox" class="toggle"></label>
+        <label class="setRow"><span>読んだ位置・本棚の分類をほかの端末と同期<small>GitHub（PCを通さない）と、つながっていればPC</small></span><input id="prefSync" type="checkbox" class="toggle"></label>
       </div>
       <h2 class="h">この端末の保存領域</h2>
       <div class="card">
@@ -149,14 +160,41 @@
         <div class="row wrap">
           <button id="ssSaveAll" class="btn primary small" type="button"><svg><use href="#i-down"/></svg>全部保存</button>
           <button id="ssDelAll" class="btn small" type="button"><svg><use href="#i-trash"/></svg>端末から削除</button>
-          <button id="ssFolderBtn" class="btn small" type="button">フォルダへ</button>
+          <button id="ssMetaBtn" class="btn small" type="button"><svg><use href="#i-tag"/></svg>分類</button>
         </div>
-        <div id="ssFolders" class="ssFolders hidden"></div>
       </div>
       <button class="iconBtn sheetClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button>
     </div>
     <ul id="ssList" class="volList"></ul>
   </section>
+
+  <!-- v0.24: 分類（長押しで出る） -->
+  <section id="metaSheet" class="sheet glass hidden" aria-modal="true" role="dialog" aria-labelledby="msTitle">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheetHead"><div class="msHead"><h3 id="msTitle"></h3><small id="msSub" class="muted"></small></div><button class="iconBtn sheetClose" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <div class="addBody">
+      <div class="field">カテゴリ（押すとすぐ移します）
+        <div class="seg wide catSeg" id="msCat">
+          <button data-v="manga" type="button">漫画</button><button data-v="novel" type="button">小説</button><button data-v="amanga" type="button">成人漫画</button><button data-v="anovel" type="button">成人小説</button><button data-v="none" type="button">未分類</button>
+        </div>
+      </div>
+      <label class="field">シリーズ（同じ名前の作品を1つにまとめます）
+        <span class="row"><input id="msSeries" type="text" list="dlSeries" autocomplete="off"><button id="msSeriesClr" class="btn small" type="button">外す</button></span>
+      </label>
+      <label class="field">作者（シリーズ以外の本を作者でまとめます）
+        <span class="row"><input id="msAuthor" type="text" list="dlAuthor" autocomplete="off"><button id="msAuthorClr" class="btn small" type="button">外す</button></span>
+      </label>
+      <div class="row wrap msActs" id="msActs"></div>
+    </div>
+    <div class="sheetFoot"><button id="msDone" class="btn primary grow" type="button">完了</button></div>
+  </section>
+  <datalist id="dlSeries"></datalist><datalist id="dlAuthor"></datalist>
+  <div id="selBar" class="selBar glass hidden">
+    <span id="selCount" class="grow"></span>
+    <button id="selAll" class="btn small" type="button">このタブを全部</button>
+    <button id="selApply" class="btn small primary" type="button">分類する</button>
+    <button id="selCancel" class="iconBtn" type="button" aria-label="やめる"><svg><use href="#i-x"/></svg></button>
+  </div>
 
   <section id="addSheet" class="sheet glass hidden" aria-modal="true" role="dialog" aria-labelledby="addTitle">
     <div class="grab" aria-hidden="true"></div>
@@ -166,14 +204,19 @@
         <div class="row"><textarea id="addUrl" rows="2" placeholder="https://…（共有された文章のままでも大丈夫）"></textarea></div>
         <div class="row"><button id="pasteBtn" class="btn small" type="button"><svg><use href="#i-paste"/></svg>貼り付け</button><span class="grow"></span><span id="addConn" class="muted small"></span></div>
       </div>
-      <div class="field">取り込み方
+      <div class="field">サイトの型
         <div class="seg wide" id="modeSeg">
-          <button data-v="list" type="button" class="on">一覧→各話</button>
-          <button data-v="page" type="button" disabled>ページの画像<em>準備中</em></button>
-          <button data-v="deep" type="button" disabled>話→読み込む<em>準備中</em></button>
+          <button data-v="" type="button" class="on">自動<em>登録どおり</em></button>
+          <button data-v="normal" type="button">ふつう<em>一覧→話</em></button>
+          <button data-v="twostep" type="button">2段階<em>話→ボタン</em></button>
+          <button data-v="gallery" type="button">画像ページ<em>1冊に</em></button>
         </div>
-        <div class="muted small" id="modeHint">一覧ページに各話へのリンクが並んでいるサイト。</div>
+        <div class="muted small" id="modeHint">サイトごとに登録した型を使います（登録が無ければふつう）。</div>
+        <label class="row small hidden" id="rememberRow"><input id="rememberMode" type="checkbox" class="toggle"><span>このサイトの型として覚える</span></label>
       </div>
+      <label class="field">表紙の画像URL（任意）
+        <input id="addCoverUrl" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…（空欄なら一覧の画像か1ページ目）">
+      </label>
       <div class="field">送り先
         <div class="row wrap">
           <label class="chip check"><input id="addKindle" type="checkbox"><span>Send to Kindle</span></label>
@@ -184,6 +227,10 @@
         <div class="pickHead">
           <input id="pickTitle" type="text" class="titleInput" aria-label="作品名">
           <div class="pickStats" id="pickStats"></div>
+          <div class="row wrap decRow" id="decRow">
+            <span class="muted small">小数話</span>
+            <div class="seg" id="decSeg"><button data-v="default" type="button" class="on">既定</button><button data-v="integer" type="button">整数話だけ</button><button data-v="all" type="button">含める</button></div>
+          </div>
           <div class="row wrap">
             <button class="btn small" data-sel="new" type="button">新しい話だけ</button>
             <button class="btn small" data-sel="all" type="button">全部</button>
@@ -215,13 +262,60 @@
     </div>
     <div id="rBottom" class="rbar rBottom glass hidden">
       <input id="rSlider" type="range" min="1" max="1" value="1" aria-label="ページ">
-      <div class="row center wrap">
-        <button id="rSpread" class="btn small" type="button">見開き</button>
-        <button id="rDir" class="btn small" type="button">右開き</button>
-        <button id="rWm" class="btn small hidden" type="button">縦書き</button>
-        <button id="rFontDn" class="btn small hidden" type="button">A−</button>
-        <button id="rFontUp" class="btn small hidden" type="button">A＋</button>
-        <button id="rFull" class="btn small" type="button">全画面</button>
+      <div class="rTools">
+        <button id="rSpread" class="rTool" type="button">見開き</button>
+        <button id="rDir" class="rTool" type="button">右開き</button>
+        <button id="rWm" class="rTool hidden" type="button">縦書き</button>
+        <button id="rAa" class="rTool strong" type="button" aria-expanded="false"><svg><use href="#i-aa"/></svg><span>表示</span></button>
+        <button id="rFull" class="rTool" type="button">全画面</button>
+      </div>
+    </div>
+    <!-- v0.24: 表示の設定（小説: 背景・フォント・文字の大きさ・行間・余白・書き方向 ／ 漫画: 見開き・向き・背景） -->
+    <div id="rPanel" class="rPanel glass hidden" role="dialog" aria-label="表示の設定">
+      <div class="rpSec textOnly">
+        <div class="rpLbl">背景</div>
+        <div class="swatches" id="rpBg"></div>
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpLbl">フォント</div>
+        <div class="fontList" id="rpFont"></div>
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpRow"><span class="rpLbl">文字の大きさ</span><b id="rpSizeV"></b></div>
+        <div class="rpSlide"><span class="aS">A</span><input id="rpSize" type="range" min="12" max="36" step="1"><span class="aL">A</span></div>
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpRow"><span class="rpLbl">行間</span><b id="rpLhV"></b></div>
+        <input id="rpLh" type="range" min="1.3" max="2.6" step="0.05">
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpRow"><span class="rpLbl">余白</span><b id="rpPadV"></b></div>
+        <input id="rpPad" type="range" min="0.3" max="2.4" step="0.1">
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpLbl">書き方向</div>
+        <div class="seg wide" id="rpWm"><button data-v="auto" type="button">本のまま</button><button data-v="vertical" type="button">縦書き</button><button data-v="horizontal" type="button">横書き</button></div>
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpRow"><span class="rpLbl">文字の太さ</span><div class="seg" id="rpWeight"><button data-v="300" type="button">細</button><button data-v="400" type="button">標準</button><button data-v="600" type="button">太</button></div></div>
+        <label class="rpRow"><span class="rpLbl">両端そろえ</span><input id="rpJustify" type="checkbox" class="toggle"></label>
+        <label class="rpRow"><span class="rpLbl">本のフォント・色を使わない</span><input id="rpOverride" type="checkbox" class="toggle"></label>
+      </div>
+      <div class="rpSec mangaOnly">
+        <div class="rpLbl">見開き</div>
+        <div class="seg wide" id="rpSpread"><button data-v="auto" type="button">横向きで</button><button data-v="off" type="button">なし</button><button data-v="on" type="button">いつも</button></div>
+      </div>
+      <div class="rpSec mangaOnly">
+        <div class="rpLbl">ページの向き</div>
+        <div class="seg wide" id="rpDir"><button data-v="rtl" type="button">右開き（日本の漫画）</button><button data-v="ltr" type="button">左開き</button></div>
+      </div>
+      <div class="rpSec mangaOnly">
+        <div class="rpLbl">まわりの色</div>
+        <div class="seg wide" id="rpMbg"><button data-v="auto" type="button">テーマ</button><button data-v="black" type="button">黒</button><button data-v="white" type="button">白</button></div>
+      </div>
+      <div class="rpSec">
+        <div class="rpLbl">タップで次へ</div>
+        <div class="seg wide" id="rpTap"><button data-v="left" type="button">左をタップ</button><button data-v="right" type="button">右をタップ</button></div>
       </div>
     </div>
   </div>
