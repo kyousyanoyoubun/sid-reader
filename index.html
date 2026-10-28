@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
-  <link rel="stylesheet" href="app.css?v=0.24.1">
+  <link rel="stylesheet" href="app.css?v=0.26.0">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -85,6 +85,13 @@
           <span class="row"><input id="tokenInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://…#t=…"><button id="tokenSave" class="btn primary" type="button">つなぐ</button></span>
         </label>
         <div id="tokenMsg" class="msg"></div>
+        <div id="homeAppBox" class="hidden">
+          <p class="muted small" id="homeAppNote"></p>
+          <div class="row wrap">
+            <button id="pasteConnect" class="btn primary hidden" type="button">コピーしたURLでつなぐ</button>
+            <button id="copyPairUrl" class="btn hidden" type="button">ホーム画面アプリ用のURLをコピー</button>
+          </div>
+        </div>
       </div>
       <h2 class="h">読み方</h2>
       <div class="card">
@@ -322,6 +329,6 @@
   </div>
 
   <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=0.24.1"></script>
+  <script src="app.js?v=0.26.0"></script>
 </body>
 </html>
