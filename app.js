@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.24.1";
+const APP_VERSION = "0.26.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -50,6 +50,39 @@ function applyPairing(text) {
   return changed;
 }
 if (location.hash.length > 1 && applyPairing(location.href)) history.replaceState(null, "", location.pathname + location.search);
+
+// v0.26: iPad/iPhoneの「ホーム画面に追加」したアプリは、Safariと保存場所（localStorage・IndexedDB）が別。
+// そのため、Safariで保存した合言葉がアプリ側に無く「PCとつながらない」状態になっていた。
+// → Safariで開いている間は、ホーム画面アプリの起動URL（manifestのstart_urlと、今のURL）に合言葉を入れておく。
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+function pairingHash() {
+  const q = new URLSearchParams();
+  if (token) q.set("t", token);
+  if (apiBase) q.set("pc", apiBase);
+  if (GH.gist && GH.token) { q.set("g", GH.gist); q.set("gh", GH.token); }
+  return q.toString();
+}
+const pairingUrl = () => `${location.origin}${location.pathname}#${pairingHash()}`;
+let manifestBase = null;
+async function prepareHomeScreenPairing() {
+  if (!isIOS || isStandalone() || window.SIDNative || !(token || (GH.gist && GH.token))) return;
+  const hash = pairingHash();
+  // (1) アドレスバーのURLに残す（manifestを使わないiOSは、追加したときのURLで起動する）
+  if (location.hash.slice(1) !== hash) history.replaceState(null, "", location.pathname + location.search + "#" + hash);
+  // (2) manifestの start_url にも入れる（追加したときの内容がアプリに残る）
+  try {
+    if (!manifestBase) manifestBase = await (await fetch("manifest.webmanifest", { cache: "no-store" })).json();
+    const abs = u => new URL(u, location.href).href;
+    const dir = abs("./");
+    const m = { ...manifestBase, id: dir, scope: dir, start_url: `${location.origin}${location.pathname}#${hash}`,
+      icons: (manifestBase.icons || []).map(i => ({ ...i, src: abs(i.src) })) };
+    if (m.share_target) m.share_target = { ...m.share_target, action: abs(m.share_target.action || "./") };
+    const link = document.querySelector('link[rel="manifest"]');
+    if (link) link.href = "data:application/manifest+json;charset=utf-8," + encodeURIComponent(JSON.stringify(m));
+  } catch (_) {}
+}
+prepareHomeScreenPairing();
 const apiUrl = path => (apiBase || "") + path;
 const deviceName = (() => { const ua = navigator.userAgent; return /iPad|Macintosh.*Mobile|Macintosh.*Safari.*Version/.test(ua) && "ontouchend" in document ? "iPad" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : "端末"; })();
 
@@ -1896,7 +1929,7 @@ function renderSegs() {
   $("prefFont").value = String(prefs.font); $("fontSizeVal").textContent = `${prefs.font}px`;
 }
 function renderSettings() {
-  renderConn(); renderSegs(); loadSiteModes().then(renderSiteModes).catch(() => renderSiteModes());
+  renderConn(); renderHomeApp(); renderSegs(); loadSiteModes().then(renderSiteModes).catch(() => renderSiteModes());
   $("tokenInput").value = "";
   $("appVersion").textContent = `ℜ Reader v${APP_VERSION}${serverInfo ? ` ／ PC helper v${serverInfo.version}` : ""}`;
   renderStorageInfo();
@@ -1912,12 +1945,39 @@ $("prefCoverSingle").addEventListener("change", () => setPref("coverSingle", $("
 $("prefSync").addEventListener("change", () => setPref("sync", $("prefSync").checked));
 $("prefStream").addEventListener("change", () => setPref("stream", $("prefStream").checked));
 $("prefFont").addEventListener("input", () => { setPref("font", Number($("prefFont").value)); $("fontSizeVal").textContent = `${prefs.font}px`; });
-$("tokenSave").addEventListener("click", async () => {
-  if (!applyPairing($("tokenInput").value)) { $("tokenMsg").textContent = "PCの「スマホ連携」に出るURLを貼ってください"; return; }
+async function connectWithText(text) {
+  if (!applyPairing(text)) { $("tokenMsg").textContent = "PCの「スマホ連携」に出るURL（または「ホーム画面アプリ用のURL」）を貼ってください"; return; }
+  prepareHomeScreenPairing();
   const ok = await checkServer();
   $("tokenMsg").textContent = ok ? "PCにつながりました" : gistOn() ? "GitHubを設定しました（PCは今はつながっていません）" : "つながりません（Tailscale・PCの起動を確認）";
-  if (ok) { pcLibrary = null; syncAllProgress(); }
-  gistSyncProgress().catch(() => {}).finally(renderConn);
+  if (ok) { pcLibrary = null; await loadPcLibrary(false).catch(() => {}); syncAllProgress(); }
+  gistSyncProgress().catch(() => {}).finally(() => { renderConn(); renderHomeApp(); });
+}
+$("tokenSave").addEventListener("click", () => connectWithText($("tokenInput").value));
+// v0.26: ホーム画面アプリ ⇔ Safari の受け渡し
+function renderHomeApp() {
+  const box = $("homeAppBox"); if (!box) return;
+  const standalone = isStandalone() && !window.SIDNative;
+  const paired = !!(token || (GH.gist && GH.token));
+  const showCopy = isIOS && !standalone && paired;
+  const showPaste = standalone && (!online || !token);
+  $("copyPairUrl").classList.toggle("hidden", !showCopy);
+  $("pasteConnect").classList.toggle("hidden", !showPaste);
+  box.classList.toggle("hidden", !showCopy && !showPaste);
+  $("homeAppNote").textContent = showPaste
+    ? "ホーム画面のアプリはSafariと保存場所が別なので、最初に一度だけつなぎます。Safariでℜ Readerを開き、設定の「ホーム画面アプリ用のURLをコピー」を押してから、ここに戻って「コピーしたURLでつなぐ」を押してください。（Safariで本棚を開き直してからホーム画面に追加し直しても、自動でつながります）"
+    : showCopy ? "「ホーム画面に追加」すると、合言葉もいっしょにアプリへ入ります。前に追加したアプリがつながらないときは、アプリを削除して追加し直すか、このボタンでコピーしてアプリの設定で貼ってください（このURLには合言葉が入っています。人に送らないでください）。" : "";
+}
+$("copyPairUrl").addEventListener("click", async () => {
+  const url = pairingUrl();
+  try { await navigator.clipboard.writeText(url); toast("コピーしました。ホーム画面のアプリを開いて「コピーしたURLでつなぐ」を押してください", 4200); }
+  catch (_) { $("tokenInput").value = url; $("tokenInput").select(); toast("コピーできなかったので、上の欄のURLを長押ししてコピーしてください", 4200); }
+});
+$("pasteConnect").addEventListener("click", async () => {
+  let text = "";
+  try { text = await navigator.clipboard.readText(); } catch (_) {}
+  if (!text) { $("tokenMsg").textContent = "クリップボードを読めませんでした。上の欄に長押しで貼り付けて「つなぐ」を押してください"; $("tokenInput").focus(); return; }
+  await connectWithText(text);
 });
 let installEvt = null;
 addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; $("installBtn").classList.remove("hidden"); });
@@ -1992,6 +2052,7 @@ $("smAdd").addEventListener("click", async () => {
 async function pairNow(text) {
   if (!applyPairing(text)) return false;
   history.replaceState(null, "", location.pathname + location.search);
+  prepareHomeScreenPairing();
   pcLibrary = null;
   const ok = await checkServer();
   toast(ok ? "PCにつながりました" : gistOn() ? "GitHubを設定しました（PCは今はつながっていません）" : "合言葉を保存しました（PCにはまだつながっていません）", 3200);
@@ -2069,7 +2130,7 @@ window.__sidBack = () => {
   showView(LS.get("view", "library") === "settings" ? "library" : (LS.get("view", "library") || "library"));
   requestAnimationFrame(moveIndicator);
   await checkServer();
-  if (!token && !gistOn()) { showView("settings"); $("tokenMsg").textContent = "PCの拡張機能の「スマホ連携」でQRコードを出して、このページを開き直してください。"; }
+  if (!token && !gistOn()) { showView("settings"); $("tokenMsg").textContent = isStandalone() && isIOS ? "ホーム画面のアプリは、Safariとは別に一度つなぐ必要があります（下の説明を見てください）。" : "PCの拡張機能の「スマホ連携」でQRコードを出して、このページを開き直してください。"; renderHomeApp(); }
   if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => gistSyncProgress().catch(() => {}), 120000); }
   if (shared) { history.replaceState(null, "", location.pathname); openAdd(shared); }
   if (online) { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); syncAllProgress(); }
