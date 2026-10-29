@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
-  <link rel="stylesheet" href="app.css?v=0.27.0">
+  <link rel="stylesheet" href="app.css?v=0.27.1">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -233,15 +233,25 @@
       <div id="pickBox" class="pickBox hidden">
         <div class="pickHead">
           <input id="pickTitle" type="text" class="titleInput" aria-label="作品名">
+          <input id="pickAuthor" type="text" class="authorInput" aria-label="作者" placeholder="作者（ページから読みます・直せます）">
           <div class="pickStats" id="pickStats"></div>
+          <div class="row wrap hidden" id="galMethodRow">
+            <span class="muted small">取り方</span>
+            <select id="pickGalMethod" class="selSmall">
+              <option value="">PCの設定どおり</option>
+              <option value="open">1ページずつ開く（確実）</option>
+              <option value="fetch">ページを開かずに読む（速い）</option>
+              <option value="next">1ページ目から「次へ」で進む</option>
+              <option value="tap">1ページ目から右タップで次々に（速い）</option>
+            </select>
+          </div>
           <div class="row wrap decRow" id="decRow">
             <span class="muted small">小数話</span>
             <div class="seg" id="decSeg"><button data-v="default" type="button" class="on">既定</button><button data-v="integer" type="button">整数話だけ</button><button data-v="all" type="button">含める</button></div>
           </div>
           <div class="row wrap">
             <button class="btn small" data-sel="new" type="button">新しい話だけ</button>
-            <button class="btn small" data-sel="all" type="button">全部</button>
-            <button class="btn small" data-sel="none" type="button">なし</button>
+            <button class="btn small" data-sel="all" type="button" title="押すたびに 全部選ぶ ⇔ 全部外す">すべて</button>
           </div>
         </div>
         <ol id="pickList" class="pickList"></ol>
@@ -328,6 +338,6 @@
   </div>
 
   <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=0.27.0"></script>
+  <script src="app.js?v=0.27.1"></script>
 </body>
 </html>
