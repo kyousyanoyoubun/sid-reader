@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.27.0";
+const APP_VERSION = "0.27.1";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -1787,6 +1787,11 @@ $("previewBtn").addEventListener("click", async () => {
           $("decRow").classList.toggle("hidden", !pick.items.some(x => x.decimal));
           $("decSeg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.v === decMode));
           $("pickTitle").value = pick.title;
+          // v0.27.1: 作者（PCがページから読んだもの・前に入れたもの）と、画像ページ型の取り方
+          $("pickAuthor").value = L.author || "";
+          pick.author = L.author || "";
+          $("galMethodRow").classList.toggle("hidden", !pick.gallery);
+          $("pickGalMethod").value = LS.get("galMethod", "");
           renderPick(); $("pickBox").classList.remove("hidden");
           $("addMsg").textContent = [L.orderNote, L.ruleHidden ? `ルールで${L.ruleHidden}件を非表示` : ""].filter(Boolean).join(" ・ ");
           $("previewBtn").disabled = false; $("previewBtn").textContent = "一覧を読み直す";
@@ -1835,7 +1840,10 @@ function renderPick() {
 }
 document.querySelectorAll("[data-sel]").forEach(b => b.addEventListener("click", () => {
   if (!pick) return; const m = b.dataset.sel;
-  pick.items.forEach(x => { if (x.completed) return; x.sel = m === "all" ? true : m === "none" ? false : (!x.saved && !x.unchecked); });
+  // v0.27.1: 「すべて」は押すたびに 全部選ぶ ⇔ 全部外す（PCの拡張機能と同じ）
+  const selectable = pick.items.filter(x => !x.completed);
+  const allOn = selectable.length && selectable.every(x => x.sel);
+  pick.items.forEach(x => { if (x.completed) return; x.sel = m === "all" ? !allOn : m === "none" ? false : (!x.saved && !x.unchecked); });
   renderPick();
 }));
 $("addSubmit").addEventListener("click", async () => {
@@ -1848,6 +1856,9 @@ $("addSubmit").addEventListener("click", async () => {
   if (pick && pick.url === url) {
     body.selection = pick.items.filter(x => x.sel).map(x => ({ url: x.url, label: x.label, chapterKey: x.chapterKey || "" }));
     const t = $("pickTitle").value.trim(); if (t && t !== pick.title) body.title = t;
+    const a = $("pickAuthor").value.trim(); if (a) body.author = a;
+    if (pick.gallery && $("pickGalMethod").value) { body.galleryMethod = $("pickGalMethod").value; }
+    LS.set("galMethod", $("pickGalMethod").value);
   }
   $("addSubmit").disabled = true;
   try {
