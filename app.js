@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.26.0";
+const APP_VERSION = "0.27.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -83,7 +83,8 @@ async function prepareHomeScreenPairing() {
   } catch (_) {}
 }
 prepareHomeScreenPairing();
-const apiUrl = path => (apiBase || "") + path;
+// v0.27: 端末ID（PCの見張りが「知らない端末」を見分けるため）。?t= で開くURL（画像・表紙・本体）にも付ける
+const apiUrl = path => (apiBase || "") + path + (/[?&]t=/.test(path) ? `&dv=${encodeURIComponent(deviceId)}` : "");
 const deviceName = (() => { const ua = navigator.userAgent; return /iPad|Macintosh.*Mobile|Macintosh.*Safari.*Version/.test(ua) && "ontouchend" in document ? "iPad" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : "端末"; })();
 
 // ---------------- IndexedDB ----------------
@@ -148,7 +149,7 @@ async function api(path, opts = {}) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), opts.timeout || 12000);
   try {
-    const r = await fetch(apiUrl(path), { method: opts.method || "GET", headers: { "X-SID-Token": token, ...(opts.body ? { "Content-Type": "application/json" } : {}) },
+    const r = await fetch(apiUrl(path), { method: opts.method || "GET", headers: { "X-SID-Token": token, "X-SID-Device": deviceId, "X-SID-Device-Name": encodeURIComponent(deviceName), ...(opts.body ? { "Content-Type": "application/json" } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined, signal: ctl.signal, cache: "no-store" });
     const data = await r.json().catch(() => ({}));
     if (r.status === 401) throw Object.assign(new Error("合言葉が違います（設定でPCのURLを貼り直してください）"), { auth: true });
@@ -2027,13 +2028,13 @@ function renderSiteModes() {
   const items = Object.entries(siteModesCache).filter(([, v]) => v.mode).map(([o, v]) => ({ o, host: o.replace(/^https?:\/\//, ""), mode: v.mode })).sort((a, b) => a.host.localeCompare(b.host));
   box.classList.toggle("muted", !items.length);
   if (!items.length) { box.textContent = online || gistOn() ? "登録したサイトはまだありません。PCの拡張機能で型を選ぶか、ここで登録できます。" : "PCかGitHubにつながると表示されます"; return; }
-  for (const mode of ["normal", "twostep", "gallery", "chain"]) {
+  for (const mode of ["normal", "gallery", "chain"]) {
     const mine = items.filter(x => x.mode === mode); if (!mine.length) continue;
     const g = el("div", "smGroup"); g.append(el("div", "smHead", `${MODE_NAME[mode]}（${mine.length}）`));
     for (const it of mine) {
       const row = el("div", "smRow");
       const seg = el("div", "seg");
-      for (const m of ["normal", "twostep", "gallery", "chain"]) { const b = el("button", m === it.mode ? "on" : "", { normal: "ふつう", twostep: "2段階", gallery: "画像", chain: "多段" }[m]); b.type = "button"; b.addEventListener("click", () => setSiteModeRemote(it.o, m).then(renderSiteModes).catch(e => toast(e.message))); seg.append(b); }
+      for (const m of ["normal", "gallery", "chain"]) { const b = el("button", m === it.mode ? "on" : "", { normal: "ふつう", twostep: "2段階", gallery: "画像", chain: "多段" }[m]); b.type = "button"; b.addEventListener("click", () => setSiteModeRemote(it.o, m).then(renderSiteModes).catch(e => toast(e.message))); seg.append(b); }
       const del = el("button", "iconBtn"); del.type = "button"; del.setAttribute("aria-label", "登録を外す"); del.append(svgUse("i-x"));
       del.addEventListener("click", () => setSiteModeRemote(it.o, "").then(renderSiteModes).catch(e => toast(e.message)));
       row.append(el("span", "smHost", it.host), seg, del); g.append(row);
