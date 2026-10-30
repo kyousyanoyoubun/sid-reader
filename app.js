@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.27.1";
+const APP_VERSION = "0.29.3";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -23,7 +23,8 @@ const prefs = {
   tap: LS.get("tap", "left"), stream: LS.get("stream", true), wm: LS.get("wm", "auto"), font: LS.get("font", 19), theme: LS.get("theme", "auto"),
   // v0.24: 小説の表示
   tbg: LS.get("tbg", "auto"), tfont: LS.get("tfont", "mincho"), tlh: LS.get("tlh", 1.85), tpad: LS.get("tpad", 1), tweight: LS.get("tweight", "400"),
-  tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto")
+  tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto"),
+  showAdult: LS.get("showAdult", false)   // v0.29.3: 成人漫画は基本表示しない（設定で表示）
 };
 function setPref(k, v) { prefs[k] = v; LS.set(k, v); }
 function applyTheme() {
@@ -422,6 +423,8 @@ function progressFor(rec, progMap) {
 }
 const coverCache = new Map(); // key -> objectURL（端末の表紙）
 async function coverUrlFor(s, idx) {
+  // v0.29.3: 成人漫画を表示しない設定のときは、表紙も取りに行かない
+  if (!prefs.showAdult && s?.id && metaOf(s.id).cat === "amanga") return "";
   const savedFile = s.files.find(f => idx[f.key]);
   if (savedFile) {
     if (coverCache.has(savedFile.key)) return coverCache.get(savedFile.key);
@@ -572,11 +575,13 @@ async function renderLibrary(reload = false) {
   await getLibMeta();
   const model = await libraryModel(); lastModel = model;
   if (seq !== renderSeq) return;
+  // v0.29.3: 成人漫画は設定で表示するまで出さない（表紙も取りに行かない）
+  if (!prefs.showAdult) model.series = model.series.filter(u => catOf(u) !== "amanga");
   const filter = $("libFilter").value.trim().toLowerCase();
   // カテゴリ（上のタブ）。未分類は、あるときだけ出す
   const counts = { none: 0 }; for (const [c] of CATS) counts[c] = 0;
   for (const u of model.series) counts[catOf(u)] = (counts[catOf(u)] || 0) + 1;
-  const tabs = CATS.map(([c]) => c).concat(counts.none ? ["none"] : []);
+  const tabs = CATS.map(([c]) => c).filter(c => prefs.showAdult || c !== "amanga").concat(counts.none ? ["none"] : []);
   if (!tabs.includes(curCat) || (!counts[curCat] && !filter)) curCat = counts.none ? "none" : (tabs.find(c => counts[c]) || "manga");
   const chips = $("shelfChips"); chips.textContent = "";
   for (const c of tabs) {
@@ -1016,7 +1021,7 @@ async function renderContinue() {
   const items = cand.map(x => ({ ...x, p: progressFor(x.b, prog) })).filter(x => x.p && x.p.pages && x.p.page > 0 && x.p.page < x.p.pages - 1).sort((a, b) => b.p.at - a.p.at).slice(0, 24);
   const box = $("contList"); box.textContent = "";
   if (!items.length) box.append(el("div", "muted small", "途中まで読んだ本はここに並びます。"));
-  for (const { b, p, saved, pf } of items) {
+  for (const { b, p, saved, pf } of items.filter(x => prefs.showAdult || !(x.pf?.s?.id && metaOf(x.pf.s.id).cat === "amanga"))) {
     const it = el("button", "contItem glass"); it.type = "button";
     const cv = coverEl(!saved && online && pf?.f?.id ? apiUrl(`/api/cover/${pf.f.id}?t=${encodeURIComponent(token)}`) : "", b.series || b.name, b.kind);
     DB.get("meta", b.key).then(m => { if (m?.cover) { const img = el("img"); img.alt = ""; img.src = URL.createObjectURL(m.cover); img.onload = () => { cv.querySelector(".ph")?.remove(); URL.revokeObjectURL(img.src); }; cv.append(img); } }).catch(() => {});
@@ -1941,6 +1946,7 @@ function renderSegs() {
   $("prefFont").value = String(prefs.font); $("fontSizeVal").textContent = `${prefs.font}px`;
 }
 function renderSettings() {
+  $("prefShowAdult").checked = !!prefs.showAdult;
   renderConn(); renderHomeApp(); renderSegs(); loadSiteModes().then(renderSiteModes).catch(() => renderSiteModes());
   $("tokenInput").value = "";
   $("appVersion").textContent = `ℜ Reader v${APP_VERSION}${serverInfo ? ` ／ PC helper v${serverInfo.version}` : ""}`;
@@ -1956,6 +1962,7 @@ document.querySelectorAll(".seg[data-pref]").forEach(seg => seg.addEventListener
 $("prefCoverSingle").addEventListener("change", () => setPref("coverSingle", $("prefCoverSingle").checked));
 $("prefSync").addEventListener("change", () => setPref("sync", $("prefSync").checked));
 $("prefStream").addEventListener("change", () => setPref("stream", $("prefStream").checked));
+$("prefShowAdult").addEventListener("change", () => { setPref("showAdult", $("prefShowAdult").checked); if (!prefs.showAdult && curCat === "amanga") curCat = ""; });
 $("prefFont").addEventListener("input", () => { setPref("font", Number($("prefFont").value)); $("fontSizeVal").textContent = `${prefs.font}px`; });
 async function connectWithText(text) {
   if (!applyPairing(text)) { $("tokenMsg").textContent = "PCの「スマホ連携」に出るURL（または「ホーム画面アプリ用のURL」）を貼ってください"; return; }
