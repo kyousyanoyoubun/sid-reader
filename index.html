@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
-  <link rel="stylesheet" href="app.css?v=0.27.1">
+  <link rel="stylesheet" href="app.css?v=0.30.0">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -253,6 +253,7 @@
           <div class="row wrap">
             <button class="btn small" data-sel="new" type="button">新しい話だけ</button>
             <button class="btn small" data-sel="all" type="button" title="押すたびに 全部選ぶ ⇔ 全部外す">すべて</button>
+            <button class="btn small" id="pickRange" type="button" title="選びたい範囲のいちばん上といちばん下をチェックしてから押すと、その間も全部選びます">間も選ぶ</button>
           </div>
         </div>
         <ol id="pickList" class="pickList"></ol>
@@ -339,6 +340,6 @@
   </div>
 
   <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=0.27.1"></script>
+  <script src="app.js?v=0.30.0"></script>
 </body>
 </html>
