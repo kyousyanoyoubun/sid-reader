@@ -354,6 +354,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 .pickList { list-style: none; padding: 0; margin: 10px 0 0; }
 .pk { display: grid; grid-template-columns: 26px 30px 1fr auto; gap: 8px; align-items: center; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .pk input { width: 20px; height: 20px; accent-color: var(--ink); }
+.pk.anchor { box-shadow: inset 3px 0 0 var(--ink); }
 .pk .o { font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--mute); text-align: right; }
 .pk .l { min-width: 0; }
 .pk .l b { display: block; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
