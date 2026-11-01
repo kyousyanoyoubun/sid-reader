@@ -1820,7 +1820,8 @@ function renderPick() {
   items.forEach((x, i) => {
     const li = el("li", "pk" + (x.sel ? "" : " off"));
     const cb = el("input"); cb.type = "checkbox"; cb.checked = !!x.sel; cb.disabled = !!x.completed; cb.setAttribute("aria-label", x.label);
-    cb.addEventListener("change", () => { x.sel = cb.checked; renderPick(); });
+    cb.addEventListener("change", () => { x.sel = cb.checked; notePickAnchor(x); renderPick(); });
+    if (pickAnchors.includes(x)) li.classList.add("anchor");
     if (x.sel) no++;
     const o = el("span", "o", x.sel ? String(no).padStart(2, "0") : "—");
     const l = el("div", "l");
@@ -1843,6 +1844,20 @@ function renderPick() {
   });
   updateAddState();
 }
+// v0.30: 範囲で選ぶ（いちばん上と下をチェック →「間も選ぶ」）
+let pickAnchors = [];
+function notePickAnchor(x) { pickAnchors = pickAnchors.filter(y => y !== x); pickAnchors.push(x); pickAnchors = pickAnchors.slice(-2); }
+$("pickRange").addEventListener("click", () => {
+  if (!pick) return;
+  const idx = pickAnchors.map(x => pick.items.indexOf(x)).filter(i => i >= 0);
+  if (idx.length < 2) { toast("選びたい範囲のいちばん上と、いちばん下をチェックしてから押してください", 3600); return; }
+  const a = Math.min(...idx), b = Math.max(...idx);
+  let n = 0;
+  for (let i = a; i <= b; i++) { const x = pick.items[i]; if (x.completed) continue; if (!x.sel) n++; x.sel = true; }
+  pickAnchors = [];
+  renderPick();
+  toast(`${a + 1}〜${b + 1}番目を選びました（${n}件を追加）`);
+});
 document.querySelectorAll("[data-sel]").forEach(b => b.addEventListener("click", () => {
   if (!pick) return; const m = b.dataset.sel;
   // v0.27.1: 「すべて」は押すたびに 全部選ぶ ⇔ 全部外す（PCの拡張機能と同じ）
