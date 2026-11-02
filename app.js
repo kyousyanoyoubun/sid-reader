@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.31.3";
+const APP_VERSION = "0.31.4";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -86,7 +86,10 @@ async function prepareHomeScreenPairing() {
 }
 prepareHomeScreenPairing();
 // v0.27: 端末ID（PCの見張りが「知らない端末」を見分けるため）。?t= で開くURL（画像・表紙・本体）にも付ける
-const apiUrl = path => (apiBase || "") + path + (/[?&]t=/.test(path) ? `&dv=${encodeURIComponent(deviceId)}` : "");
+// v0.31.3: Tailscaleで直接つながる番号（PCの 8444番。Funnelにしていない）。つながればこちらを使う（Funnel=中継は遅い）
+let directBase = LS.get("pcDirect", ""), directOn = false, directState = "", directTriedAt = 0;
+const baseNow = () => (directOn && directBase) ? directBase : (apiBase || "");
+const apiUrl = path => baseNow() + path + (/[?&]t=/.test(path) ? `&dv=${encodeURIComponent(deviceId)}` : "");
 const deviceName = (() => { const ua = navigator.userAgent; return /iPad|Macintosh.*Mobile|Macintosh.*Safari.*Version/.test(ua) && "ontouchend" in document ? "iPad" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : "端末"; })();
 
 // ---------------- IndexedDB ----------------
@@ -167,8 +170,37 @@ async function api(path, opts = {}) {
 let netState = { pc: "", pcText: "" };
 let failStreak = 0;
 let netOkAt = 0; // v0.31.1: 本の断片が最後に届いた時刻（取り寄せ中は /api/info が遅れても「つながっている」とみなす）
+/** 8444番（Tailscaleだけ）に届くか試す。届けば以後そちらを使う */
+function directCandidate() {
+  try {
+    const port = Number(serverInfo?.directPort) || Number(LS.get("pcDirectPort", 0)) || 0;
+    const u = new URL(apiBase || location.origin);
+    if (!port || !/\.ts\.net$/i.test(u.hostname)) return "";
+    u.port = String(port); return u.origin;
+  } catch (_) { return ""; }
+}
+async function probeDirect(quiet = false) {
+  const cand = directCandidate() || directBase;
+  if (!cand || !token) return false;
+  directTriedAt = Date.now();
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const r = await fetch(cand + "/api/info", { headers: { "X-SID-Token": token, "X-SID-Device": deviceId, "X-SID-Device-Name": encodeURIComponent(deviceName) }, cache: "no-store", signal: ctl.signal });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok && !/Funnel/.test(j.via || "")) {
+      const was = directOn;
+      directBase = cand; LS.set("pcDirect", cand); directOn = true; directState = "ok"; serverInfo = j;
+      if (!was && !quiet) toast("Tailscaleで直接つながりました（取り寄せが速くなります）");
+      return true;
+    }
+  } catch (_) {} finally { clearTimeout(tm); }
+  directOn = false; directState = "ng";
+  return false;
+}
 async function checkServer() {
   const before = online;
+  // v0.31.3: 前に直接つながったことがあれば、まずそちらを試す（外出先などで届かなければ、いつものURLへ）
+  if (token && directBase && !directOn && Date.now() - directTriedAt > 60000) await probeDirect(true);
   if (token && Date.now() - netOkAt < 30000) { online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; $("setDot").classList.add("hidden"); checkedOnce = true; return true; }
   if (!token) { online = false; netState = { pc: "none", pcText: "未設定" }; }
   else if (!apiBase && /github\.io$/.test(location.hostname)) { online = false; netState = { pc: "none", pcText: "PCのURLなし" }; }
@@ -179,7 +211,16 @@ async function checkServer() {
       try { serverInfo = await api("/api/info", { timeout: i ? 12000 : 8000 }); ok = true; }
       catch (e) { err = e; if (e.auth) break; await sleep(i ? 2500 : 1200); }
     }
-    if (ok) { online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; flushPending(); }
+    if (!ok && directOn) {
+      // 直接の番号に届かなくなった（外出先・Tailscaleを切った）→ いつものURLで聞き直す
+      directOn = false;
+      try { serverInfo = await api("/api/info", { timeout: 12000 }); ok = true; } catch (e) { err = e; }
+    }
+    if (ok) {
+      online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; flushPending();
+      if (serverInfo?.directPort) LS.set("pcDirectPort", serverInfo.directPort);
+      if (!directOn && /Funnel/.test(serverInfo?.via || "") && Date.now() - directTriedAt > 60000) probeDirect().then(okd => { if (okd && currentView === "settings") renderConn(); });
+    }
     else { failStreak++; online = false; netState = { pc: "off", pcText: err?.auth ? "合言葉が違います" : "いまはつながっていません" }; }
   }
   $("setDot").classList.toggle("hidden", online || !token);
@@ -943,7 +984,7 @@ function attachRing(act, job) {
 function setRing(ring, p) { const c = ring.querySelector("circle"); const L = 2 * Math.PI * 18.5; c.setAttribute("stroke-dashoffset", String(L * (1 - Math.max(0.02, p)))); }
 // v0.31.3: Funnel（中継）経由だと取り寄せがとても遅い。1回だけ知らせる
 function warnFunnel() {
-  if (warnFunnel.done || !/Funnel/.test(serverInfo?.via || "")) return;
+  if (warnFunnel.done || directOn || !/Funnel/.test(serverInfo?.via || "")) return;
   warnFunnel.done = true;
   toast("いまはFunnel（中継）経由なので取り寄せが遅いです。TailscaleをONにして、アプリを閉じて開き直すと速くなります（設定→いまの経路）", 7000);
 }
@@ -1083,6 +1124,7 @@ class ChunkJob {
           return;
         } catch (e) {
           if (e.fatal || t >= 15) throw e;
+          if (directOn && t >= 1) directOn = false; // v0.31.3: 直接の番号に届かなくなったら、いつものURLで続ける
           await sleep(Math.min(20000, 1000 * (t + 1)));
         } finally { clearTimeout(tm); }
       }
@@ -2289,12 +2331,20 @@ setInterval(() => { if (currentView === "requests" && !document.hidden) loadRequ
 function renderConn() {
   const ul = $("connState"); ul.textContent = "";
   const row = (ok, title, note) => { const li = el("li"); const mk = el("span", "mk " + (ok === true ? "ok" : ok === false ? "ng" : ""), ok === true ? "✓" : ok === false ? "!" : ""); const t = el("div", "", title); if (note) t.append(el("small", "", note)); li.append(mk, t); ul.append(li); };
-  const pcHost = apiBase ? apiBase.replace(/^https?:\/\//, "") : location.host;
+  const pcHost = baseNow() ? baseNow().replace(/^https?:\/\//, "") : location.host;
   row(online ? true : token ? false : null, "PC（本の一覧と保存）", online ? `つながっています（${pcHost}）${serverInfo?.readerRoot ? `\n本棚: ${serverInfo.readerRoot}` : ""}` : token ? `${netState.pcText}。PC・Firefox・helperの起動と、Tailscaleを確認` : "PCの「スマホ連携」のQRコードを読むとつながります");
   if (online && serverInfo) row(true, "PCへの道", serverInfo.publicMode === "public" ? "インターネットから（このスマホにTailscaleは不要）" : "Tailscale（このスマホにもTailscaleが必要）");
   if (online && serverInfo?.via) {
-    const viaFunnel = /Funnel/.test(serverInfo.via);
-    row(viaFunnel ? false : true, "いまの経路", viaFunnel ? `${serverInfo.via}＝中継を通るので遅い\nこの端末のTailscaleをON（設定の「Tailscale DNSを使う」もON）にしてから、このアプリを完全に閉じて開き直すと直接（速い）になります` : `${serverInfo.via}（直接・速い）`);
+    const viaFunnel = /Funnel/.test(serverInfo.via) && !directOn;
+    const why = directState === "ng"
+      ? "\nTailscaleだけの番号（" + (directCandidate() || "8444番").replace(/^https?:\/\//, "") + "）に届きませんでした＝この端末の名前引き（DNS）がTailscaleを通っていません。"
+        + "\n・Tailscaleアプリで接続中か、「Tailscale DNSを使う（Use Tailscale DNS）」がONか"
+        + "\n・ほかのVPN・DNSのアプリや構成プロファイル（AdGuard・NextDNS・1.1.1.1 など）が入っていないか（あるとTailscaleのDNSが使われません）"
+        + "\n・iCloudプライベートリレー／「IPアドレスのトラッキングを制限」がONならOFFにして試す"
+        + "\n・PCで SETUP_TAILSCALE_SERVE.bat を一度実行（8444番を開く）"
+      : !serverInfo.directPort ? "\nPCがまだTailscaleだけの番号（8444番）を開いていません。PCで SETUP_TAILSCALE_SERVE.bat を一度実行してください" : "";
+    row(viaFunnel ? false : true, "いまの経路", directOn ? `Tailscale（直接・速い） ${directBase.replace(/^https?:\/\//, "")}` : viaFunnel ? `${serverInfo.via}＝中継を通るので遅い${why}` : `${serverInfo.via}（直接・速い）`);
+    if (viaFunnel) { const li = el("li"); const b = el("button", "secondary mini", "Tailscaleで直接つながるか試す"); b.type = "button"; b.addEventListener("click", async () => { b.disabled = true; b.textContent = "試しています…"; const okd = await probeDirect(); if (!okd) toast("届きませんでした（上の説明を確認してください）", 5000); renderConn(); }); li.append(b); ul.append(li); }
   }
   row(gistOn() ? (ghState.ok === false ? false : true) : null, "GitHub（PCを通さずに同期・依頼）", gistOn() ? (ghState.ok === false ? ghState.err : ghState.at ? `最終同期 ${new Date(ghState.at).toLocaleTimeString("ja-JP")}` : "設定済み") : "PCで「GitHubでつなぐ」を設定してからQRを読み直すと使えます");
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
