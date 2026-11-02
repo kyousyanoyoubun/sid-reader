@@ -1,7 +1,7 @@
 // ℜ Reader Service Worker: アプリ本体をキャッシュして、PCがオフでも起動できるようにする。
 // /api/ は常にネットへ（本の中身はIndexedDBに保存するのでここでは扱わない）。
-const CACHE = "sid-reader-v0.31.0";
-const SHELL = ["./", "index.html", "app.js?v=0.31.0", "app.css?v=0.31.0", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
+const CACHE = "sid-reader-v0.31.1";
+const SHELL = ["./", "index.html", "app.js?v=0.31.1", "app.css?v=0.31.1", "manifest.webmanifest", "icon.svg", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -24,10 +24,16 @@ self.addEventListener("fetch", e => {
   // iPadなどで新しいページ＋古いapp.jsの組み合わせになり、表示や機能がAPKと違うことがあった
   const shell = /\/(app\.js|app\.css|manifest\.webmanifest|pair\.html)$/.test(url.pathname);
   if (shell) {
-    e.respondWith(Promise.race([
-      fetch(e.request).then(r => { if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); } return r; }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))
-    ]).catch(() => caches.match(e.request).then(hit => hit || caches.match(e.request, { ignoreSearch: true })).then(hit => hit || fetch(e.request))));
+    // v0.31.1: 版付き（?v=）の本体は、同じ版のキャッシュだけを使う。違う版（古いapp.js）を返すと、新しい画面に古い動きが混ざる
+    // （Funnel経由で4秒以内に届かないと古いapp.jsが使われ、新しい機能が効いていないことがあった）
+    const versioned = url.searchParams.has("v");
+    e.respondWith(caches.match(e.request).then(exact => {
+      const net = fetch(e.request).then(r => { if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); } return r; });
+      if (exact) { net.catch(() => {}); return exact; }               // 同じ版があればすぐそれ（裏で取り直す）
+      if (versioned) return net.catch(() => caches.match(e.request, { ignoreSearch: true }).then(h => h || Response.error()));
+      return Promise.race([net, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000))])
+        .catch(() => caches.match(e.request, { ignoreSearch: true }).then(hit => hit || net));
+    }));
     return;
   }
   // それ以外（アイコンなど）: キャッシュを返しつつ裏で更新
