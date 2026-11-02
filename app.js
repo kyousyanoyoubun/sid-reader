@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.31.0";
+const APP_VERSION = "0.31.1";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -95,13 +95,12 @@ const DB = (() => {
   function open() {
     if (dbp) return dbp;
     dbp = new Promise((res, rej) => {
-      const rq = indexedDB.open("sid-reader", 1);
+      const rq = indexedDB.open("sid-reader", 2);
       rq.onupgradeneeded = () => {
         const db = rq.result;
-        db.createObjectStore("books", { keyPath: "key" });
-        db.createObjectStore("meta", { keyPath: "key" });
-        db.createObjectStore("progress", { keyPath: "key" });
-        db.createObjectStore("kv", { keyPath: "k" });
+        const mk = (n, kp) => { if (!db.objectStoreNames.contains(n)) db.createObjectStore(n, { keyPath: kp }); };
+        mk("books", "key"); mk("meta", "key"); mk("progress", "key"); mk("kv", "k");
+        mk("chunks", "k"); // v0.31.1: 少しずつ取り寄せている本の断片（1MBずつ）
       };
       rq.onsuccess = () => res(rq.result);
       rq.onerror = () => rej(rq.error);
@@ -123,7 +122,9 @@ const DB = (() => {
     del: (store, key) => tx(store, "readwrite", s => req(s.delete(key))),
     all: store => tx(store, "readonly", s => req(s.getAll())),
     keys: store => tx(store, "readonly", s => req(s.getAllKeys())),
-    clear: store => tx(store, "readwrite", s => req(s.clear()))
+    clear: store => tx(store, "readwrite", s => req(s.clear())),
+    keysIn: (store, a, b) => tx(store, "readonly", s => req(s.getAllKeys(IDBKeyRange.bound(a, b)))),
+    delIn: (store, a, b) => tx(store, "readwrite", s => req(s.delete(IDBKeyRange.bound(a, b))))
   };
 })();
 async function kvGet(k, d) { try { const r = await DB.get("kv", k); return r ? r.v : d; } catch (_) { return d; } }
@@ -161,8 +162,10 @@ async function api(path, opts = {}) {
 }
 let netState = { pc: "", pcText: "" };
 let failStreak = 0;
+let netOkAt = 0; // v0.31.1: 本の断片が最後に届いた時刻（取り寄せ中は /api/info が遅れても「つながっている」とみなす）
 async function checkServer() {
   const before = online;
+  if (token && Date.now() - netOkAt < 30000) { online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; $("setDot").classList.add("hidden"); checkedOnce = true; return true; }
   if (!token) { online = false; netState = { pc: "none", pcText: "未設定" }; }
   else if (!apiBase && /github\.io$/.test(location.hostname)) { online = false; netState = { pc: "none", pcText: "PCのURLなし" }; }
   else {
@@ -928,6 +931,7 @@ function attachRing(act, job) {
 }
 function setRing(ring, p) { const c = ring.querySelector("circle"); const L = 2 * Math.PI * 18.5; c.setAttribute("stroke-dashoffset", String(L * (1 - Math.max(0.02, p)))); }
 async function saveBook(s, f, openAfter, asCache = false) {
+  if (!window.SIDNative) return chunkSave(s, f, openAfter, asCache);
   if (dl.has(f.key)) { const j = dl.get(f.key); if (openAfter) { toast("読み込み中です。終わったら開きます"); showDlOverlay(j, f); } j.openAfter ||= openAfter; if (!asCache) j.cache = false; return; }
   if (!online) { toast("PCにつながっていません"); return; }
   const job = { p: 0, els: new Set(), openAfter, cache: asCache };
@@ -975,6 +979,12 @@ async function purgeCache() {
     if (!rec.cache || rec.key === R.key || dl.has(rec.key)) continue;
     if ((rec.lastOpened || rec.savedAt || 0) < lim) { await removeLocal(rec.key).catch(() => {}); n++; }
   }
+  // 途中まで取り寄せて放ってある本（キャッシュ）も同じ日数で消す
+  const parts = await getPartials();
+  for (const [k, v] of Object.entries(parts)) {
+    if (!v.cache || k === R.key || chunkJobs.get(k)?.running) continue;
+    if ((v.at || 0) < lim) { await DB.delIn("chunks", k + "|", k + "|\uffff").catch(() => {}); await setPartial(k, null); n++; }
+  }
   return n;
 }
 $("ssSaveAll").addEventListener("click", async () => {
@@ -995,10 +1005,178 @@ $("ssDelAll").addEventListener("click", async () => {
   toast("端末から削除しました"); renderSeriesList(); renderLibrary(false);
 });
 async function removeLocal(key) {
+  const job = chunkJobs.get(key); if (job) await job.discard().catch(() => {});
+  else { await DB.delIn("chunks", key + "|", key + "|\uffff").catch(() => {}); await setPartial(key, null).catch(() => {}); }
   const rec = (await getSaved())[key];
   if (rec?.native && window.SIDNative) { try { SIDNative.remove(rec.file); } catch (_) {} }
   await DB.del("books", key); await DB.del("meta", key).catch(() => {}); await unsetSaved(key);
   if (coverCache.has(key)) { URL.revokeObjectURL(coverCache.get(key)); coverCache.delete(key); }
+}
+
+// ---------------- v0.31.1: 本を1MBずつ取り寄せて端末に貯める（ブラウザ・iPad） ----------------
+// ・タップした本はすぐ開く（目次と見ているページの分だけ先に取る）。残りは裏で2本ずつ取り寄せる
+// ・1つの取り寄せが小さいので、Funnel経由で遅くても途中で切れにくい。切れてもその1MBだけやり直す
+// ・アプリを閉じても、取り終わった分は残る（次に開いたとき・起動したときに続きから）
+// ・全部そろったら1冊のEPUBにまとめて保存（キャッシュ／↓で保存）し、断片は消す
+const CHUNK = 1024 * 1024;
+const chunkJobs = new Map();
+async function getPartials() { return (await kvGet("partials", {})) || {}; }
+async function setPartial(key, v) { const m = await getPartials(); if (v) m[key] = v; else delete m[key]; await kvSet("partials", m); }
+class ChunkJob {
+  constructor(s, f, cache) {
+    this.s = { id: s.id, title: s.title, shelf: s.shelf || "", kind: s.kind || "", site: s.site || "", pc: true, files: [] };
+    this.f = { key: f.key, id: f.id, name: f.name, size: f.size || 0, variant: f.variant || "", range: f.range || "" };
+    this.key = f.key; this.size = this.f.size; this.n = Math.max(1, Math.ceil(this.size / CHUNK)); this.cache = cache;
+    this.have = new Set(); this.pending = new Map(); this.mem = new Map(); this.blob = null; this.els = new Set();
+    this.stopped = false; this.err = null; this.running = null; this.openAfter = false;
+  }
+  get p() { return this.blob ? 1 : this.have.size / this.n; }
+  ck(i) { return `${this.key}|${String(i).padStart(6, "0")}`; }
+  url() { return apiUrl(`/api/file/${this.f.id}?t=${encodeURIComponent(token)}`); }
+  async init() {
+    if (!this.size) throw new Error("本の大きさが分かりません（PCの一覧を読み直してください）");
+    try { for (const k of await DB.keysIn("chunks", this.key + "|", this.key + "|\uffff")) this.have.add(Number(String(k).slice(String(k).lastIndexOf("|") + 1))); } catch (_) {}
+    await setPartial(this.key, { s: this.s, f: this.f, cache: this.cache, at: Date.now() });
+    try { await navigator.storage?.persist?.(); } catch (_) {}
+    return this;
+  }
+  emit() { const p = this.p; this.els.forEach(r => setRing(r, p)); if (this.onProgress) this.onProgress(p); }
+  trimMem() { while (this.mem.size > 24) this.mem.delete(this.mem.keys().next().value); }
+  fetchChunk(i) {
+    if (this.blob || this.have.has(i)) return Promise.resolve();
+    if (this.pending.has(i)) return this.pending.get(i);
+    const pr = (async () => {
+      const a = i * CHUNK, b = Math.min(this.size, a + CHUNK) - 1;
+      for (let t = 0; ; t++) {
+        if (this.stopped) throw new Error("止めました");
+        const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 45000);
+        try {
+          const r = await fetch(this.url(), { headers: { Range: `bytes=${a}-${b}` }, cache: "no-store", signal: ctl.signal });
+          if (r.status === 401) throw Object.assign(new Error("合言葉が違います"), { fatal: true });
+          if (r.status === 404) throw Object.assign(new Error("PCにこの本がありません（一覧を読み直してください）"), { fatal: true });
+          if (r.status !== 206) throw new Error(`HTTP ${r.status}`);
+          const ab = await r.arrayBuffer();
+          if (ab.byteLength !== b - a + 1) throw new Error("途中で切れました");
+          netOkAt = Date.now();
+          await DB.put("chunks", { k: this.ck(i), b: new Blob([ab]) });
+          this.mem.set(i, ab); this.trimMem();
+          this.have.add(i); this.emit();
+          return;
+        } catch (e) {
+          if (e.fatal || t >= 15) throw e;
+          await sleep(Math.min(20000, 1000 * (t + 1)));
+        } finally { clearTimeout(tm); }
+      }
+    })().finally(() => this.pending.delete(i));
+    this.pending.set(i, pr); return pr;
+  }
+  async chunkBuf(i) {
+    if (this.mem.has(i)) return this.mem.get(i);
+    const rec = await DB.get("chunks", this.ck(i)).catch(() => null);
+    if (!rec) { if (this.blob) return null; this.have.delete(i); await this.fetchChunk(i); return this.chunkBuf(i); }
+    const ab = await rec.b.arrayBuffer(); this.mem.set(i, ab); this.trimMem(); return ab;
+  }
+  async read(a, b) {
+    if (this.blob) return this.blob.slice(a, b).arrayBuffer();
+    const i0 = Math.floor(a / CHUNK), i1 = Math.floor((b - 1) / CHUNK);
+    const idx = []; for (let i = i0; i <= i1; i++) idx.push(i);
+    await Promise.all(idx.map(i => this.fetchChunk(i)));
+    if (this.blob) return this.blob.slice(a, b).arrayBuffer();
+    const out = new Uint8Array(b - a); let o = 0;
+    for (const i of idx) {
+      const ab = await this.chunkBuf(i);
+      if (!ab) return this.blob.slice(a, b).arrayBuffer();
+      const cs = i * CHUNK, s0 = Math.max(a, cs) - cs, s1 = Math.min(b, cs + ab.byteLength) - cs;
+      out.set(new Uint8Array(ab, s0, s1 - s0), o); o += s1 - s0;
+    }
+    return out.buffer;
+  }
+  source() { return { size: this.size, read: (a, b) => this.read(a, b) }; }
+  run() {
+    if (this.running) return this.running;
+    this.stopped = false; this.err = null;
+    this.running = (async () => {
+      // まず最後（目次）と最初を取ってから、前から順に。読んでいるページの分は read() が先に取る
+      await Promise.all([this.fetchChunk(this.n - 1), this.fetchChunk(0)]);
+      let next = 0;
+      const worker = async () => {
+        while (!this.stopped) {
+          while (next < this.n && (this.have.has(next) || this.pending.has(next))) next++;
+          if (next >= this.n) break;
+          await this.fetchChunk(next++);
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      await Promise.all([...this.pending.values()]);
+      if (this.have.size >= this.n) await this.finish();
+      else throw new Error("途中で止まりました");
+    })().catch(e => { this.err = e; throw e; }).finally(() => { this.running = null; });
+    return this.running;
+  }
+  async finish() {
+    const parts = [];
+    for (let i = 0; i < this.n; i++) { const rec = await DB.get("chunks", this.ck(i)); if (!rec) { this.have.delete(i); throw new Error("断片が足りません（もう一度開いてください）"); } parts.push(rec.b); }
+    const blob = new Blob(parts, { type: "application/epub+zip" });
+    if (blob.size !== this.size) throw new Error("大きさが合いません（PCの本が変わった可能性。一覧を読み直してください）");
+    let cover = await cachedCoverBlob(this.f.id);
+    if (!cover && online) { try { const rc = await fetch(apiUrl(`/api/cover/${this.f.id}?t=${encodeURIComponent(token)}`)); if (rc.ok) { cover = await rc.blob(); putCoverBlob(this.f.id, cover); } } catch (_) {} }
+    const rec = { key: this.key, fileId: this.f.id, name: this.f.name, series: this.s.title, shelf: this.s.shelf, kind: this.s.kind, site: this.s.site, variant: this.f.variant, range: this.f.range,
+      savedAt: Date.now(), lastOpened: Date.now(), pc: true, cache: !!this.cache, size: blob.size, blob };
+    await DB.put("books", rec);
+    const m = await DB.get("meta", this.key).catch(() => null);
+    await DB.put("meta", { ...(m || {}), key: this.key, cover: m?.cover || cover });
+    await setSaved(rec);
+    this.blob = blob; this.mem.clear();
+    await DB.delIn("chunks", this.key + "|", this.key + "|\uffff").catch(() => {});
+    await setPartial(this.key, null);
+    chunkJobs.delete(this.key);
+    this.emit();
+  }
+  async discard() {
+    this.stopped = true; chunkJobs.delete(this.key);
+    await DB.delIn("chunks", this.key + "|", this.key + "|\uffff").catch(() => {});
+    await setPartial(this.key, null);
+  }
+}
+async function chunkJobFor(s, f, cache) {
+  let job = chunkJobs.get(f.key);
+  if (!job) { job = new ChunkJob(s, f, cache); chunkJobs.set(f.key, job); await job.init(); }
+  if (!cache && job.cache) { job.cache = false; await setPartial(job.key, { s: job.s, f: job.f, cache: false, at: Date.now() }); }
+  return job;
+}
+function runChunkJob(job, quiet) {
+  dl.set(job.key, job);
+  job.run().then(() => {
+    dl.delete(job.key);
+    if (!quiet && R.key !== job.key) toast(`${job.cache ? "キャッシュしました" : "保存しました"}: ${volLabel(job.f.name).text || job.f.name}`);
+  }).catch(e => {
+    dl.delete(job.key);
+    if (!quiet && !job.stopped) toast(`取り寄せが止まりました（${e.message || e}）。もう一度タップすると続きから取ります`, 6000);
+  }).finally(() => { if (sheetSeries) renderSeriesList(); if (currentView === "library" && !R.book) renderLibrary(false); });
+}
+async function chunkSave(s, f, openAfter, asCache) {
+  if (!token) { toast("PCにつながっていません"); return; }
+  let job;
+  try { job = await chunkJobFor(s, f, asCache); } catch (e) { toast(String(e.message || e)); return; }
+  runChunkJob(job, false);
+  if (sheetSeries) renderSeriesList();
+  if (openAfter) return openPartial(job);
+  toast(`端末に取り寄せています（${Math.round(job.p * 100)}%）`);
+}
+/** 取り寄せながら読む: 開くのに要る分（目次・今のページ）だけ先に取る。めくったページは端末に残る */
+async function openPartial(job) {
+  if (job.blob) return openBook(job.key);
+  LS.set("openBook", "");
+  return openWith(job.key, { name: job.f.name, series: job.s.title, kind: job.s.kind }, () => new ZipReader(job.source()).open(), false, job);
+}
+/** 起動したとき・PCにつながったとき: 途中まで取り寄せた本の続きを裏で取る */
+async function resumePartials() {
+  if (!token || window.SIDNative) return;
+  const m = await getPartials();
+  for (const v of Object.values(m)) {
+    if (chunkJobs.has(v.f?.key) || !v.f?.key) continue;
+    try { const job = await chunkJobFor(v.s, v.f, v.cache); runChunkJob(job, true); } catch (_) {}
+  }
 }
 
 /** PCの本を端末に保存。Androidアプリでは SDカードへ（アプリが直接ダウンロード）、ブラウザでは IndexedDB へ。
@@ -1391,7 +1569,7 @@ async function openStream(s, f) {
   if (!online) { toast("PCにつながっていません"); return; }
   return openWith(f.key, { name: f.name, series: s.title, kind: s.kind }, () => new RemoteZip(f.id).open(), true);
 }
-async function openWith(key, rec, getSrc, streaming = false) {
+async function openWith(key, rec, getSrc, streaming = false, partial = null) {
   closeSheets(); closeFab();
   $("reader").classList.remove("hidden"); $("reader").setAttribute("aria-hidden", "false");
   $("rLoading").classList.remove("hidden");
@@ -1401,8 +1579,9 @@ async function openWith(key, rec, getSrc, streaming = false) {
     const meta = await DB.get("meta", key).catch(() => null);
     const book = await Book.open(await getSrc(), meta?.kind ? { kind: meta.kind, pages: meta.pages } : (meta?.pages ? { kind: "manga", pages: meta.pages } : null));
     if (!meta?.kind) { try { await DB.put("meta", { ...(meta || { key }), key, pages: book.pages, kind: book.kind, title: book.title, cover: meta?.cover || (streaming ? null : await book.coverBlob().catch(() => null)) }); } catch (_) {} }
-    R.book = book; R.key = key; R.rec = rec; R.title = rec.name; R.streaming = streaming;
-    $("rTitle").textContent = bookTitle(rec.series, rec.name) + (streaming ? "（PCから）" : "");
+    R.book = book; R.key = key; R.rec = rec; R.title = rec.name; R.streaming = streaming; R.partial = partial;
+    $("rTitle").textContent = bookTitle(rec.series, rec.name) + (streaming ? "（PCから）" : partial ? `（取り寄せ中 ${Math.round(partial.p * 100)}%）` : "");
+    if (partial) partial.onProgress = p => { if (R.partial === partial) $("rTitle").textContent = bookTitle(rec.series, rec.name) + (p >= 1 ? "" : `（取り寄せ中 ${Math.round(p * 100)}%）`); };
     if (prefs.sync && gistOn()) await Promise.race([gistSyncProgress().catch(() => {}), sleep(2500)]);
     const progMap = new Map((await DB.all("progress").catch(() => [])).map(p => [p.key, p]));
     let best = progressFor(rec, progMap);
@@ -1469,6 +1648,7 @@ async function show() {
   saveProgress({ page: R.page, pages: R.book.pages.length });
   const near = [];
   for (let d = 1; d <= 3; d++) { const a = R.views[R.vi + d], b = R.views[R.vi - d]; if (a) near.push(...a); if (b && d <= 1) near.push(...b); }
+  if (R.partial && !R.partial.blob) for (let d = 4; d <= 8; d++) { const a = R.views[R.vi + d]; if (a) near.push(...a); }
   near.forEach(i => R.book.url(i).then(u => { if (R.book?.remote) { const im = new Image(); im.decoding = "async"; im.src = u; } }).catch(() => {}));
   R.book.trim(R.page, 10);
 }
@@ -1673,6 +1853,7 @@ function closeReader() {
   $("reader").classList.add("hidden"); $("reader").setAttribute("aria-hidden", "true");
   document.body.style.overflow = "";
   if (R.book) { R.book.close(); R.book = null; }
+  if (R.partial) { R.partial.onProgress = null; R.partial = null; }
   $("textFrame").srcdoc = ""; $("pgA").removeAttribute("src"); $("pgB").removeAttribute("src");
   if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   setUi(false);
@@ -2121,7 +2302,8 @@ $("persistBtn").addEventListener("click", async () => {
 });
 $("clearAll").addEventListener("click", async () => {
   if (!confirm("この端末に保存した本・読んだ位置をすべて削除します。PCのファイルは消えません。よいですか？")) return;
-  await DB.clear("books"); await DB.clear("meta"); await DB.clear("progress"); savedIndex = {}; await kvSet("savedIndex", {});
+  for (const j of [...chunkJobs.values()]) j.stopped = true; chunkJobs.clear();
+  await DB.clear("books"); await DB.clear("meta"); await DB.clear("progress"); await DB.clear("chunks").catch(() => {}); await kvSet("partials", {}); savedIndex = {}; await kvSet("savedIndex", {});
   toast("削除しました"); renderStorageInfo();
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (prefs.theme === "auto") updateThemeTile(); });
@@ -2269,6 +2451,7 @@ window.__sidBack = () => {
   if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => gistSyncProgress().catch(() => {}), 120000); }
   if (shared) { history.replaceState(null, "", location.pathname); openAdd(shared); }
   if (online) { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); syncAllProgress(); }
+  setTimeout(() => resumePartials().catch(() => {}), 3000);
   syncLibMeta().catch(() => {});
   if (online) loadSiteModes().catch(() => {});
   schedulePcCheck();
