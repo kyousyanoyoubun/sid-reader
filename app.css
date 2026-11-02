@@ -376,7 +376,8 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 .stage.textMode { display: none; }
 .textFrame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--paper); }
 .tapLayer { position: absolute; inset: 0; z-index: 2; }
-.rLoading { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; }
+.rLoading { position: fixed; left: 0; right: 0; top: calc(var(--safe-t, env(safe-area-inset-top)) + 14px); z-index: 70; display: flex; justify-content: center; pointer-events: none; }
+.rLoading .spin { background: var(--glass, rgba(127,127,127,.25)); box-shadow: 0 2px 10px rgba(0,0,0,.25); }
 .spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line2); border-top-color: var(--ink); animation: rot .8s linear infinite; }
 @keyframes rot { to { transform: rotate(360deg); } }
 .rbar { position: absolute; left: 10px; right: 10px; z-index: 4; border-radius: 20px; padding: 8px 12px; animation: barIn .3s var(--ease); }
@@ -426,8 +427,8 @@ html.ptrOn, html.ptrOn body { overscroll-behavior-y: contain; }
 .ptr svg { width: 22px; height: 22px; }
 .ptr.show { transition: none; }
 .ptr.ready { box-shadow: 0 0 0 2px var(--ink2), var(--shadow-s); }
-.ptr.spin { transition: transform .2s var(--ease); }
-.ptr.spin svg { animation: ptrSpin .8s linear infinite; }
+.ptr.busy { transition: none; transform: translate(-50%, 0) !important; top: calc(var(--safe-t) + 10px); opacity: 1 !important; animation: none !important; } /* v0.31.3: 読み込み中は上の真ん中に固定（丸は動かさず、中の矢印だけ回す） */
+.ptr.busy svg { animation: ptrSpin .8s linear infinite; transform-origin: 50% 50%; }
 @keyframes ptrSpin { to { transform: rotate(360deg); } }
 
 /* ======================= v0.24 ======================= */
@@ -579,3 +580,5 @@ html.ptrOn, html.ptrOn body { overscroll-behavior-y: contain; }
 .numIn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .numIn input { width: 64px; padding: 6px 8px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: transparent; color: inherit; font: inherit; text-align: right; }
 .vol .act.cached { opacity: .8; outline: 1.5px dashed currentColor; outline-offset: -4px; }
+
+.dlOverlay .dlBox { position: fixed; top: calc(env(safe-area-inset-top) + 14px); left: 50%; transform: translateX(-50%); }
