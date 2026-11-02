@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.29.3";
+const APP_VERSION = "0.31.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -20,7 +20,8 @@ const LS = {
 };
 const prefs = {
   dir: LS.get("dir", "rtl"), spread: LS.get("spread", "auto"), coverSingle: LS.get("coverSingle", true), sync: LS.get("sync", true),
-  tap: LS.get("tap", "left"), stream: LS.get("stream", true), wm: LS.get("wm", "auto"), font: LS.get("font", 19), theme: LS.get("theme", "auto"),
+  // v0.31: 既定は「タップした巻を端末にキャッシュしてから読む」。PCから直接読む（ストリーム）は設定でON
+  tap: LS.get("tap", "left"), stream: LS.get("stream2", false), cacheDays: LS.get("cacheDays", 3), wm: LS.get("wm", "auto"), font: LS.get("font", 19), theme: LS.get("theme", "auto"),
   // v0.24: 小説の表示
   tbg: LS.get("tbg", "auto"), tfont: LS.get("tfont", "mincho"), tlh: LS.get("tlh", 1.85), tpad: LS.get("tpad", 1), tweight: LS.get("tweight", "400"),
   tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto"),
@@ -187,10 +188,12 @@ function schedulePcCheck() {
   clearTimeout(pcTimer);
   if (document.hidden) return;
   if (online) offlineSince = 0; else if (!offlineSince) offlineSince = Date.now();
-  const delay = online ? 60000 : (Date.now() - offlineSince < 120000 ? 8000 : 30000);
+  // v0.31: 本を読んでいる間はPCに問い合わせない（ページ送りはすべて端末の中で行う）。つながっている間の確認も3分ごとに減らした
+  const delay = R.book ? 180000 : online ? 180000 : (Date.now() - offlineSince < 120000 ? 8000 : 30000);
   pcTimer = setTimeout(() => pcCheckNow(), delay);
 }
 async function pcCheckNow() {
+  if (R.book && !R.streaming) { schedulePcCheck(); return; }
   if (Date.now() - lastCheckAt < 1500 || pcCheckNow.busy) return;
   lastCheckAt = Date.now(); pcCheckNow.busy = true;
   const was = online;
@@ -361,7 +364,7 @@ let pcLibrary = null;
 let shelf = LS.get("shelf", "all");
 async function loadPcLibrary(force) {
   if (!online) { if (!pcLibrary) pcLibrary = await kvGet("pcLibrary", null); return pcLibrary; }
-  try { pcLibrary = await api("/api/library" + (force ? "?force=1" : ""), { timeout: 30000 }); await kvSet("pcLibrary", pcLibrary); await reconcileSaved(); }
+  try { pcLibrary = await api("/api/library" + (force ? "?force=1" : ""), { timeout: 30000 }); await kvSet("pcLibrary", pcLibrary); await reconcileSaved(); setTimeout(() => prefetchCovers().catch(() => {}), 1500); }
   catch (e) { toast(e.message); if (!pcLibrary) pcLibrary = await kvGet("pcLibrary", null); }
   return pcLibrary;
 }
@@ -422,6 +425,27 @@ function progressFor(rec, progMap) {
   return best;
 }
 const coverCache = new Map(); // key -> objectURL（端末の表紙）
+// v0.31: 表紙（サムネ）はいつも端末に持っておく（meta ストアの "cv:ファイルID"）。PCにつながらなくても本棚に表紙が出る
+async function cachedCoverBlob(fileId) { if (!fileId) return null; try { const m = await DB.get("meta", "cv:" + fileId); return m?.cover || null; } catch (_) { return null; } }
+async function putCoverBlob(fileId, blob) { if (!fileId || !blob || !blob.size) return; try { await DB.put("meta", { key: "cv:" + fileId, cover: blob, at: Date.now() }); } catch (_) {} }
+const coverFetching = new Map();
+async function fetchCoverBlob(fileId) {
+  if (!online || !fileId) return null;
+  if (coverFetching.has(fileId)) return coverFetching.get(fileId);
+  const p = (async () => {
+    try { const r = await fetch(apiUrl(`/api/cover/${fileId}?t=${encodeURIComponent(token)}`)); if (!r.ok) return null; const b = await r.blob(); if (!b.size || !/^image\//.test(b.type || "image/")) return null; await putCoverBlob(fileId, b); return b; }
+    catch (_) { return null; } finally { coverFetching.delete(fileId); }
+  })();
+  coverFetching.set(fileId, p); return p;
+}
+async function coverUrlForFile(fileId) {
+  if (!fileId) return "";
+  const ck = "cv:" + fileId;
+  if (coverCache.has(ck)) return coverCache.get(ck);
+  const b = (await cachedCoverBlob(fileId)) || (await fetchCoverBlob(fileId));
+  if (!b) return "";
+  const u = URL.createObjectURL(b); coverCache.set(ck, u); return u;
+}
 async function coverUrlFor(s, idx) {
   // v0.29.3: 成人漫画を表示しない設定のときは、表紙も取りに行かない
   if (!prefs.showAdult && s?.id && metaOf(s.id).cat === "amanga") return "";
@@ -431,8 +455,24 @@ async function coverUrlFor(s, idx) {
     const m = await DB.get("meta", savedFile.key).catch(() => null);
     if (m?.cover) { const u = URL.createObjectURL(m.cover); coverCache.set(savedFile.key, u); return u; }
   }
-  if (online && s.files[0]?.id) return apiUrl(`/api/cover/${s.files[0].id}?t=${encodeURIComponent(token)}`);
+  if (s.files[0]?.id) return coverUrlForFile(s.files[0].id);
   return "";
+}
+/** 本棚を読んだあと、まだ端末に無い表紙を裏で少しずつ取っておく（成人漫画を表示しない設定なら取らない） */
+let coverPrefetching = false;
+async function prefetchCovers() {
+  if (coverPrefetching || !online || !pcLibrary?.series) return;
+  coverPrefetching = true;
+  try {
+    const ids = [];
+    for (const s of pcLibrary.series) {
+      if (!prefs.showAdult && metaOf(s.id).cat === "amanga") continue;
+      const id = s.files?.[0]?.id; if (id) ids.push(id);
+    }
+    let i = 0;
+    const worker = async () => { while (i < ids.length && online && !R.book) { const id = ids[i++]; if (!(await cachedCoverBlob(id))) { await fetchCoverBlob(id); await sleep(120); } } };
+    await Promise.all([worker(), worker()]);
+  } finally { coverPrefetching = false; }
 }
 function coverEl(url, title, kind) {
   const cv = el("div", "cv");
@@ -647,7 +687,7 @@ async function openUnit(u) {
   if (u.files.length === 1) {
     const f = u.files[0];
     if (idx[f.key]) return openBook(f.key);
-    if (online && u.pc) return prefs.stream ? openStream(u, f) : saveBook(u, f, true);
+    if (online && u.pc) return prefs.stream ? openStream(u, f) : saveBook(u, f, true, true);
   }
   openSeries(u);
 }
@@ -848,15 +888,20 @@ function volRow(s, f, isSaved, p) {
   const L = volLabel(f.name);
   const n = el("div", "n"); if (L.no) n.append(el("span", "no", L.no)); n.append(el("span", "", L.text || f.range || f.name));
   const pct = p?.pages ? Math.round((p.page + 1) / p.pages * 100) : null;
-  left.append(n, el("div", "m", [L.text && f.range && !L.text.includes("話") ? f.range : "", f.size ? fmtMB(f.size) : "", pct != null ? `${pct}%` : "", isSaved ? "端末に保存済み" : ""].filter(Boolean).join(" · ")));
+  const srec = isSaved ? savedIndex?.[f.key] : null;
+  const cached = !!srec?.cache;
+  left.append(n, el("div", "m", [L.text && f.range && !L.text.includes("話") ? f.range : "", f.size ? fmtMB(f.size) : "", pct != null ? `${pct}%` : "", isSaved ? (cached ? cacheNote(srec) : "端末に保存済み") : ""].filter(Boolean).join(" · ")));
   if (pct != null) { const b = el("div", "bar"); const i = el("i"); i.style.width = pct + "%"; b.append(i); left.append(b); }
-  const act = el("button", "act" + (isSaved ? " saved" : "")); act.type = "button";
-  act.setAttribute("aria-label", isSaved ? "端末から削除" : "端末に保存");
-  act.append(svgUse(isSaved ? "i-check" : "i-down"));
+  const act = el("button", "act" + (isSaved ? (cached ? " cached" : " saved") : "")); act.type = "button";
+  act.setAttribute("aria-label", isSaved ? (cached ? "ずっと保存する（自動で消さない）" : "端末から削除") : "端末に保存");
+  act.append(svgUse(isSaved && !cached ? "i-check" : "i-down"));
   const job = dl.get(f.key);
   if (job) attachRing(act, job);
   act.addEventListener("click", async e => {
     e.stopPropagation();
+    if (isSaved && cached) {
+      await setSaved({ ...srec, cache: false }); toast("ずっと保存にしました（自動では消しません）"); renderSeriesList(); return;
+    }
     if (isSaved) {
       if (!confirm(`「${f.name}」をこの端末から削除しますか？\n（PCのファイルは消えません）`)) return;
       await removeLocal(f.key); renderSeriesList(); if (currentView === "library") renderLibrary(false);
@@ -865,7 +910,7 @@ function volRow(s, f, isSaved, p) {
   li.append(left, act);
   li.addEventListener("click", () => {
     if (isSaved) openBook(f.key);
-    else if (online && s.pc) prefs.stream ? openStream(s, f) : saveBook(s, f, true);
+    else if (online && s.pc) prefs.stream ? openStream(s, f) : saveBook(s, f, true, true);
     else toast("PCにつながっていないため開けません（保存した本だけ読めます）");
   });
   return li;
@@ -882,19 +927,55 @@ function attachRing(act, job) {
   setRing(ring, job.p);
 }
 function setRing(ring, p) { const c = ring.querySelector("circle"); const L = 2 * Math.PI * 18.5; c.setAttribute("stroke-dashoffset", String(L * (1 - Math.max(0.02, p)))); }
-async function saveBook(s, f, openAfter) {
-  if (dl.has(f.key)) { if (openAfter) toast("保存中です。終わったら開きます"); dl.get(f.key).openAfter ||= openAfter; return; }
+async function saveBook(s, f, openAfter, asCache = false) {
+  if (dl.has(f.key)) { const j = dl.get(f.key); if (openAfter) { toast("読み込み中です。終わったら開きます"); showDlOverlay(j, f); } j.openAfter ||= openAfter; if (!asCache) j.cache = false; return; }
   if (!online) { toast("PCにつながっていません"); return; }
-  const job = { p: 0, els: new Set(), openAfter };
+  const job = { p: 0, els: new Set(), openAfter, cache: asCache };
   dl.set(f.key, job);
   renderSeriesList();
+  if (openAfter) showDlOverlay(job, f);
   try {
-    await downloadBook(s, f, p => { job.p = p; job.els.forEach(r => setRing(r, p)); });
-    toast(`保存しました: ${volLabel(f.name).text || f.name}`);
+    await downloadBook(s, f, p => { job.p = p; job.els.forEach(r => setRing(r, p)); updateDlOverlay(job); }, () => job.cache);
+    if (!job.openAfter || !job.cache) toast(`${job.cache ? "キャッシュしました" : "保存しました"}: ${volLabel(f.name).text || f.name}`);
+    hideDlOverlay(job);
     dl.delete(f.key);
     if (job.openAfter) await openBook(f.key);
-  } catch (e) { dl.delete(f.key); toast("保存に失敗: " + (e.message || e), 5000); }
+  } catch (e) { dl.delete(f.key); hideDlOverlay(job); if (!job.cancelled) toast("読み込みに失敗: " + (e.message || e), 5000); }
   renderSeriesList(); if (currentView === "library") renderLibrary(false);
+}
+// v0.31: タップした巻を読み込んでいる間の表示（本を開く前）。閉じても裏で読み込みは続き、終わったら開く
+let dlOverlayJob = null;
+function showDlOverlay(job, f) {
+  dlOverlayJob = job;
+  $("dlOverlay").classList.remove("hidden");
+  $("dlOvTitle").textContent = bookTitle(sheetSeries?.title || "", f.name);
+  updateDlOverlay(job);
+}
+function updateDlOverlay(job) {
+  if (dlOverlayJob !== job) return;
+  $("dlOvBar").style.width = `${Math.round(Math.max(0.02, job.p) * 100)}%`;
+  $("dlOvPct").textContent = `${Math.round(job.p * 100)}%`;
+}
+function hideDlOverlay(job) { if (!job || dlOverlayJob === job) { dlOverlayJob = null; $("dlOverlay").classList.add("hidden"); } }
+$("dlOvClose").addEventListener("click", () => { if (dlOverlayJob) { dlOverlayJob.openAfter = false; toast("裏で読み込みを続けます（終わったら本棚から開けます）"); } hideDlOverlay(); });
+function cacheNote(rec) {
+  if (!prefs.cacheDays) return "キャッシュ";
+  const left = rec.lastOpened ? Math.max(0, prefs.cacheDays * 86400000 - (Date.now() - rec.lastOpened)) : prefs.cacheDays * 86400000;
+  const d = Math.ceil(left / 86400000);
+  return `キャッシュ（読まないと${d <= 1 ? "1日以内" : d + "日後"}に削除）`;
+}
+/** v0.31: キャッシュ（タップして読んだ巻）のうち、設定の日数より長く開いていないものを消す。読んでいる本は消さない */
+async function purgeCache() {
+  const days = Number(prefs.cacheDays) || 0;
+  if (!days) return 0;
+  const idx = await getSaved();
+  const lim = Date.now() - days * 86400000;
+  let n = 0;
+  for (const rec of Object.values(idx)) {
+    if (!rec.cache || rec.key === R.key || dl.has(rec.key)) continue;
+    if ((rec.lastOpened || rec.savedAt || 0) < lim) { await removeLocal(rec.key).catch(() => {}); n++; }
+  }
+  return n;
 }
 $("ssSaveAll").addEventListener("click", async () => {
   const s = sheetSeries; if (!s) return;
@@ -922,16 +1003,16 @@ async function removeLocal(key) {
 
 /** PCの本を端末に保存。Androidアプリでは SDカードへ（アプリが直接ダウンロード）、ブラウザでは IndexedDB へ。
  *  ブラウザでは4本同時に分けて取り寄せて速くする（Funnel/Tailscale経由は1本だと遅い） */
-async function downloadBook(s, f, onProgress) {
+async function downloadBook(s, f, onProgress, isCache = () => false) {
   if (!online) throw new Error("PCにつながっていません");
   const fileUrl = apiUrl(`/api/file/${f.id}?t=${encodeURIComponent(token)}`);
   let cover = null;
-  const getCover = async () => { try { const rc = await fetch(apiUrl(`/api/cover/${f.id}?t=${encodeURIComponent(token)}`)); if (rc.ok) cover = await rc.blob(); } catch (_) {} };
-  const base = { key: f.key, fileId: f.id, name: f.name, series: s.title, shelf: s.shelf || "", kind: s.kind || "", site: s.site || "", variant: f.variant || "", range: f.range || "", savedAt: Date.now(), pc: true };
+  const getCover = async () => { try { cover = await cachedCoverBlob(f.id); if (cover) return; const rc = await fetch(apiUrl(`/api/cover/${f.id}?t=${encodeURIComponent(token)}`)); if (rc.ok) { cover = await rc.blob(); putCoverBlob(f.id, cover); } } catch (_) {} };
+  const base = { key: f.key, fileId: f.id, name: f.name, series: s.title, shelf: s.shelf || "", kind: s.kind || "", site: s.site || "", variant: f.variant || "", range: f.range || "", savedAt: Date.now(), lastOpened: Date.now(), pc: true };
   if (window.SIDNative) {
     const res = await nativeDownload(fileUrl, f.name, f.size, onProgress);
     await getCover();
-    const rec = { ...base, native: true, file: res.file, dir: res.dir, size: res.size };
+    const rec = { ...base, cache: !!isCache(), native: true, file: res.file, dir: res.dir, size: res.size };
     await DB.put("meta", { key: f.key, cover }); await setSaved(rec);
     return;
   }
@@ -968,7 +1049,7 @@ async function downloadBook(s, f, onProgress) {
   if (total && blob.size !== total) throw new Error("途中で切れました。もう一度試してください");
   try { await navigator.storage?.persist?.(); } catch (_) {}
   await getCover();
-  const rec = { ...base, size: blob.size, blob };
+  const rec = { ...base, cache: !!isCache(), size: blob.size, blob };
   await DB.put("books", rec);
   await DB.put("meta", { key: f.key, cover });
   await setSaved(rec);
@@ -1023,7 +1104,8 @@ async function renderContinue() {
   if (!items.length) box.append(el("div", "muted small", "途中まで読んだ本はここに並びます。"));
   for (const { b, p, saved, pf } of items.filter(x => prefs.showAdult || !(x.pf?.s?.id && metaOf(x.pf.s.id).cat === "amanga"))) {
     const it = el("button", "contItem glass"); it.type = "button";
-    const cv = coverEl(!saved && online && pf?.f?.id ? apiUrl(`/api/cover/${pf.f.id}?t=${encodeURIComponent(token)}`) : "", b.series || b.name, b.kind);
+    const cv = coverEl("", b.series || b.name, b.kind);
+    if (!saved && pf?.f?.id) coverUrlForFile(pf.f.id).then(u => { if (u) { const img = el("img"); img.alt = ""; img.onload = () => cv.querySelector(".ph")?.remove(); img.src = u; cv.append(img); } });
     DB.get("meta", b.key).then(m => { if (m?.cover) { const img = el("img"); img.alt = ""; img.src = URL.createObjectURL(m.cover); img.onload = () => { cv.querySelector(".ph")?.remove(); URL.revokeObjectURL(img.src); }; cv.append(img); } }).catch(() => {});
     const L = volLabel(b.name);
     const sub = [L.no, L.text].filter(Boolean).join(" ");
@@ -1293,6 +1375,8 @@ async function openBook(key) {
   const idx = await getSaved();
   const info = idx[key];
   if (!info) { toast("この本はまだ保存されていません"); return; }
+  setSaved({ ...info, lastOpened: Date.now() }).catch(() => {});
+  LS.set("openBook", key);
   let src;
   if (info.native) {
     if (!window.SIDNative) { toast("この本はAndroidアプリのSDカードに保存されています"); return; }
@@ -1317,13 +1401,13 @@ async function openWith(key, rec, getSrc, streaming = false) {
     const meta = await DB.get("meta", key).catch(() => null);
     const book = await Book.open(await getSrc(), meta?.kind ? { kind: meta.kind, pages: meta.pages } : (meta?.pages ? { kind: "manga", pages: meta.pages } : null));
     if (!meta?.kind) { try { await DB.put("meta", { ...(meta || { key }), key, pages: book.pages, kind: book.kind, title: book.title, cover: meta?.cover || (streaming ? null : await book.coverBlob().catch(() => null)) }); } catch (_) {} }
-    R.book = book; R.key = key; R.rec = rec; R.title = rec.name;
+    R.book = book; R.key = key; R.rec = rec; R.title = rec.name; R.streaming = streaming;
     $("rTitle").textContent = bookTitle(rec.series, rec.name) + (streaming ? "（PCから）" : "");
     if (prefs.sync && gistOn()) await Promise.race([gistSyncProgress().catch(() => {}), sleep(2500)]);
     const progMap = new Map((await DB.all("progress").catch(() => [])).map(p => [p.key, p]));
     let best = progressFor(rec, progMap);
     if (prefs.sync && online && !key.startsWith("local:")) {
-      try { const all = (await api("/api/progress", { timeout: 5000 })).progress || {}; for (const [k, sp] of Object.entries(all)) if ((k === key || sp.title === rec.name) && (!best || sp.at > best.at)) best = sp; } catch (_) {}
+      try { const all = (await Promise.race([api("/api/progress", { timeout: 4000 }), sleep(1500).then(() => ({}))])).progress || {}; for (const [k, sp] of Object.entries(all)) if ((k === key || sp.title === rec.name) && (!best || sp.at > best.at)) best = sp; } catch (_) {}
     }
     const textMode = book.kind === "text";
     $("stage").classList.toggle("textMode", textMode); $("textFrame").classList.toggle("hidden", !textMode);
@@ -1559,9 +1643,19 @@ function saveProgress(pos) {
   progTimer = setTimeout(async () => {
     const p = { key, ...pos, at: Date.now() / 1000, title, device: deviceName };
     await DB.put("progress", p).catch(() => {});
-    if (prefs.sync && online) api("/api/progress", { method: "POST", body: { progress: { [key]: p } }, timeout: 5000 }).catch(() => {});
+    // v0.31: PCへはページごとに送らない（本を閉じたとき・アプリが裏に回ったときにまとめて送る）
+    if (prefs.sync) { progressPcDirty[key] = p; if (R.streaming && online) flushProgressPc(); }
     if (prefs.sync && gistOn()) { gistProgressDirty = true; clearTimeout(saveProgress.gt); saveProgress.gt = setTimeout(() => gistSyncProgress().catch(() => {}), 15000); }
   }, 700);
+}
+const progressPcDirty = {};
+function flushProgressPc() {
+  const keys = Object.keys(progressPcDirty); if (!keys.length || !prefs.sync || !token) return;
+  const body = {}; for (const k of keys) { body[k] = progressPcDirty[k]; delete progressPcDirty[k]; }
+  try {
+    fetch(apiUrl("/api/progress"), { method: "POST", keepalive: true, headers: { "X-SID-Token": token, "X-SID-Device": deviceId, "X-SID-Device-Name": encodeURIComponent(deviceName), "Content-Type": "application/json" }, body: JSON.stringify({ progress: body }) })
+      .then(r => { if (!r.ok) Object.assign(progressPcDirty, body); }).catch(() => { for (const k in body) if (!progressPcDirty[k]) progressPcDirty[k] = body[k]; });
+  } catch (_) {}
 }
 async function syncAllProgress() {
   if (!prefs.sync || !online) return;
@@ -1573,6 +1667,8 @@ async function syncAllProgress() {
   } catch (_) {}
 }
 function closeReader() {
+  LS.set("openBook", "");
+  flushProgressPc();
   nativeCall("setImmersive", false);
   $("reader").classList.add("hidden"); $("reader").setAttribute("aria-hidden", "true");
   document.body.style.overflow = "";
@@ -1959,6 +2055,7 @@ function renderSegs() {
   document.querySelectorAll(".seg[data-pref]").forEach(seg => seg.querySelectorAll("button").forEach(b => b.classList.toggle("on", String(prefs[seg.dataset.pref]) === b.dataset.v)));
   $("prefCoverSingle").checked = !!prefs.coverSingle; $("prefSync").checked = !!prefs.sync; $("prefStream").checked = !!prefs.stream;
   $("prefFont").value = String(prefs.font); $("fontSizeVal").textContent = `${prefs.font}px`;
+  $("prefCacheDays").value = String(prefs.cacheDays);
 }
 function renderSettings() {
   $("prefShowAdult").checked = !!prefs.showAdult;
@@ -1976,7 +2073,8 @@ document.querySelectorAll(".seg[data-pref]").forEach(seg => seg.addEventListener
 }));
 $("prefCoverSingle").addEventListener("change", () => setPref("coverSingle", $("prefCoverSingle").checked));
 $("prefSync").addEventListener("change", () => setPref("sync", $("prefSync").checked));
-$("prefStream").addEventListener("change", () => setPref("stream", $("prefStream").checked));
+$("prefStream").addEventListener("change", () => { prefs.stream = $("prefStream").checked; LS.set("stream2", prefs.stream); });
+$("prefCacheDays").addEventListener("change", () => { const v = Math.max(0, Math.min(365, Math.round(Number($("prefCacheDays").value) || 0))); $("prefCacheDays").value = String(v); setPref("cacheDays", v); purgeCache().then(n => { if (n) toast(`読まれていないキャッシュを${n}冊消しました`); }); });
 $("prefShowAdult").addEventListener("change", () => { setPref("showAdult", $("prefShowAdult").checked); if (!prefs.showAdult && curCat === "amanga") curCat = ""; });
 $("prefFont").addEventListener("input", () => { setPref("font", Number($("prefFont").value)); $("fontSizeVal").textContent = `${prefs.font}px`; });
 async function connectWithText(text) {
@@ -2163,6 +2261,9 @@ window.__sidBack = () => {
   await reconcileSaved().catch(() => {});
   showView(LS.get("view", "library") === "settings" ? "library" : (LS.get("view", "library") || "library"));
   requestAnimationFrame(moveIndicator);
+  // v0.31: 読んでいる途中でアプリが閉じられた（iPadで裏に回したあと等）ら、端末にある本ならそのまま開き直す
+  const reopen = LS.get("openBook", "");
+  if (reopen) { const idx0 = await getSaved(); if (idx0[reopen]) openBook(reopen); else LS.set("openBook", ""); }
   await checkServer();
   if (!token && !gistOn()) { showView("settings"); $("tokenMsg").textContent = isStandalone() && isIOS ? "ホーム画面のアプリは、Safariとは別に一度つなぐ必要があります（下の説明を見てください）。" : "PCの拡張機能の「スマホ連携」でQRコードを出して、このページを開き直してください。"; renderHomeApp(); }
   if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => gistSyncProgress().catch(() => {}), 120000); }
@@ -2175,5 +2276,9 @@ window.__sidBack = () => {
   addEventListener("focus", () => pcCheckNow());
   addEventListener("pageshow", () => pcCheckNow());
   // 画面に戻った直後は回線が戻っていないことがあるので少し待ってから確認
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) setTimeout(pcCheckNow, 900); else clearTimeout(pcTimer); });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) { setTimeout(pcCheckNow, 900); if (!R.book) purgeCache().catch(() => {}); }
+    else { clearTimeout(pcTimer); flushProgressPc(); }
+  });
+  purgeCache().then(n => { if (n) toast(`${prefs.cacheDays}日以上読んでいないキャッシュを${n}冊消しました`); }).catch(() => {});
 })();
