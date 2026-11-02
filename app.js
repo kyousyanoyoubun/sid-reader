@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.31.1";
+const APP_VERSION = "0.31.3";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -129,6 +129,10 @@ const DB = (() => {
 })();
 async function kvGet(k, d) { try { const r = await DB.get("kv", k); return r ? r.v : d; } catch (_) { return d; } }
 async function kvSet(k, v) { try { await DB.put("kv", { k, v }); } catch (_) {} }
+// v0.31.2: iPad（Safari）では Blob を IndexedDB にしまえないことがある（「Error preparing Blob/File data…」）。
+// 表紙・本の断片は ArrayBuffer にしてしまう。読むときに Blob に戻す（前の版でしまった Blob もそのまま読める）
+const blobPack = async b => (b && b.size) ? { ab: await b.arrayBuffer(), type: b.type || "" } : null;
+const blobUnpack = x => !x ? null : (x instanceof Blob ? x : (x.ab ? new Blob([x.ab], { type: x.type || "" }) : null));
 /** 保存した本の一覧（本体Blobを読まない軽い版）。kv "savedIndex" に持つ */
 let savedIndex = null;
 async function getSaved() {
@@ -367,8 +371,14 @@ let pcLibrary = null;
 let shelf = LS.get("shelf", "all");
 async function loadPcLibrary(force) {
   if (!online) { if (!pcLibrary) pcLibrary = await kvGet("pcLibrary", null); return pcLibrary; }
-  try { pcLibrary = await api("/api/library" + (force ? "?force=1" : ""), { timeout: 30000 }); await kvSet("pcLibrary", pcLibrary); await reconcileSaved(); setTimeout(() => prefetchCovers().catch(() => {}), 1500); }
-  catch (e) { toast(e.message); if (!pcLibrary) pcLibrary = await kvGet("pcLibrary", null); }
+  try {
+    let lib = await api("/api/library" + (force ? "?force=1" : ""), { timeout: 45000 });
+    // v0.31.2: PCが一時的に空の一覧を返したとき（起動直後など）は、前の一覧を消さずにもう一度だけ聞き直す
+    if (!lib?.series?.length) { await sleep(3000); try { lib = await api("/api/library?force=1", { timeout: 45000 }); } catch (_) {} }
+    if (lib?.series?.length || !pcLibrary?.series?.length) { pcLibrary = lib; await kvSet("pcLibrary", pcLibrary); }
+    await reconcileSaved(); setTimeout(() => prefetchCovers().catch(() => {}), 1500);
+  }
+  catch (e) { toast(e.message); if (!pcLibrary?.series?.length) pcLibrary = (await kvGet("pcLibrary", null)) || pcLibrary; }
   return pcLibrary;
 }
 /** 保存済みの本を、いまのPCの一覧（D:\\epub）のファイルへ付け替える。キーが違っても、ファイル名が一致すれば同じ本として扱う */
@@ -388,7 +398,7 @@ async function reconcileSaved() {
     if (idx[nk]) continue; // 同じ本がすでに保存されている
     try {
       const patch = { key: nk, fileId: hit.f.id, series: hit.s.title, shelf: hit.s.shelf, kind: hit.s.kind, pc: true };
-      if (rec.native) { await setSaved({ ...rec, ...patch }); await unsetSaved(rec.key); }
+      if (rec.native || rec.chunked) { await setSaved({ ...rec, ...patch, chunkKey: rec.chunkKey || rec.key }); await unsetSaved(rec.key); }
       else {
         const full = await DB.get("books", rec.key); if (!full) continue;
         await DB.put("books", { ...full, ...patch }); await DB.del("books", rec.key);
@@ -429,8 +439,8 @@ function progressFor(rec, progMap) {
 }
 const coverCache = new Map(); // key -> objectURL（端末の表紙）
 // v0.31: 表紙（サムネ）はいつも端末に持っておく（meta ストアの "cv:ファイルID"）。PCにつながらなくても本棚に表紙が出る
-async function cachedCoverBlob(fileId) { if (!fileId) return null; try { const m = await DB.get("meta", "cv:" + fileId); return m?.cover || null; } catch (_) { return null; } }
-async function putCoverBlob(fileId, blob) { if (!fileId || !blob || !blob.size) return; try { await DB.put("meta", { key: "cv:" + fileId, cover: blob, at: Date.now() }); } catch (_) {} }
+async function cachedCoverBlob(fileId) { if (!fileId) return null; try { const m = await DB.get("meta", "cv:" + fileId); return blobUnpack(m?.cover); } catch (_) { return null; } }
+async function putCoverBlob(fileId, blob) { if (!fileId || !blob || !blob.size) return; try { await DB.put("meta", { key: "cv:" + fileId, cover: await blobPack(blob), at: Date.now() }); } catch (_) {} }
 const coverFetching = new Map();
 async function fetchCoverBlob(fileId) {
   if (!online || !fileId) return null;
@@ -456,7 +466,8 @@ async function coverUrlFor(s, idx) {
   if (savedFile) {
     if (coverCache.has(savedFile.key)) return coverCache.get(savedFile.key);
     const m = await DB.get("meta", savedFile.key).catch(() => null);
-    if (m?.cover) { const u = URL.createObjectURL(m.cover); coverCache.set(savedFile.key, u); return u; }
+    const cb = blobUnpack(m?.cover);
+    if (cb) { const u = URL.createObjectURL(cb); coverCache.set(savedFile.key, u); return u; }
   }
   if (s.files[0]?.id) return coverUrlForFile(s.files[0].id);
   return "";
@@ -930,10 +941,17 @@ function attachRing(act, job) {
   setRing(ring, job.p);
 }
 function setRing(ring, p) { const c = ring.querySelector("circle"); const L = 2 * Math.PI * 18.5; c.setAttribute("stroke-dashoffset", String(L * (1 - Math.max(0.02, p)))); }
+// v0.31.3: Funnel（中継）経由だと取り寄せがとても遅い。1回だけ知らせる
+function warnFunnel() {
+  if (warnFunnel.done || !/Funnel/.test(serverInfo?.via || "")) return;
+  warnFunnel.done = true;
+  toast("いまはFunnel（中継）経由なので取り寄せが遅いです。TailscaleをONにして、アプリを閉じて開き直すと速くなります（設定→いまの経路）", 7000);
+}
 async function saveBook(s, f, openAfter, asCache = false) {
   if (!window.SIDNative) return chunkSave(s, f, openAfter, asCache);
   if (dl.has(f.key)) { const j = dl.get(f.key); if (openAfter) { toast("読み込み中です。終わったら開きます"); showDlOverlay(j, f); } j.openAfter ||= openAfter; if (!asCache) j.cache = false; return; }
   if (!online) { toast("PCにつながっていません"); return; }
+  warnFunnel();
   const job = { p: 0, els: new Set(), openAfter, cache: asCache };
   dl.set(f.key, job);
   renderSeriesList();
@@ -1005,9 +1023,10 @@ $("ssDelAll").addEventListener("click", async () => {
   toast("端末から削除しました"); renderSeriesList(); renderLibrary(false);
 });
 async function removeLocal(key) {
-  const job = chunkJobs.get(key); if (job) await job.discard().catch(() => {});
-  else { await DB.delIn("chunks", key + "|", key + "|\uffff").catch(() => {}); await setPartial(key, null).catch(() => {}); }
   const rec = (await getSaved())[key];
+  const job = chunkJobs.get(key); if (job) await job.discard().catch(() => {});
+  const ck = rec?.chunkKey || key;
+  await DB.delIn("chunks", ck + "|", ck + "|\uffff").catch(() => {}); await setPartial(key, null).catch(() => {});
   if (rec?.native && window.SIDNative) { try { SIDNative.remove(rec.file); } catch (_) {} }
   await DB.del("books", key); await DB.del("meta", key).catch(() => {}); await unsetSaved(key);
   if (coverCache.has(key)) { URL.revokeObjectURL(coverCache.get(key)); coverCache.delete(key); }
@@ -1030,7 +1049,7 @@ class ChunkJob {
     this.have = new Set(); this.pending = new Map(); this.mem = new Map(); this.blob = null; this.els = new Set();
     this.stopped = false; this.err = null; this.running = null; this.openAfter = false;
   }
-  get p() { return this.blob ? 1 : this.have.size / this.n; }
+  get p() { return this.done ? 1 : this.have.size / this.n; }
   ck(i) { return `${this.key}|${String(i).padStart(6, "0")}`; }
   url() { return apiUrl(`/api/file/${this.f.id}?t=${encodeURIComponent(token)}`); }
   async init() {
@@ -1058,7 +1077,7 @@ class ChunkJob {
           const ab = await r.arrayBuffer();
           if (ab.byteLength !== b - a + 1) throw new Error("途中で切れました");
           netOkAt = Date.now();
-          await DB.put("chunks", { k: this.ck(i), b: new Blob([ab]) });
+          await DB.put("chunks", { k: this.ck(i), ab });
           this.mem.set(i, ab); this.trimMem();
           this.have.add(i); this.emit();
           return;
@@ -1074,13 +1093,15 @@ class ChunkJob {
     if (this.mem.has(i)) return this.mem.get(i);
     const rec = await DB.get("chunks", this.ck(i)).catch(() => null);
     if (!rec) { if (this.blob) return null; this.have.delete(i); await this.fetchChunk(i); return this.chunkBuf(i); }
-    const ab = await rec.b.arrayBuffer(); this.mem.set(i, ab); this.trimMem(); return ab;
+    const ab = rec.ab || await rec.b.arrayBuffer(); this.mem.set(i, ab); this.trimMem(); return ab;
   }
   async read(a, b) {
     if (this.blob) return this.blob.slice(a, b).arrayBuffer();
     const i0 = Math.floor(a / CHUNK), i1 = Math.floor((b - 1) / CHUNK);
     const idx = []; for (let i = i0; i <= i1; i++) idx.push(i);
-    await Promise.all(idx.map(i => this.fetchChunk(i)));
+    // v0.31.3: 見ているページの分を先に（裏の取り寄せは、ページの分が届くまで次を始めない）
+    const need = idx.filter(i => !this.have.has(i));
+    if (need.length) { this.fg = (this.fg || 0) + 1; try { await Promise.all(need.map(i => this.fetchChunk(i))); } finally { this.fg--; } }
     if (this.blob) return this.blob.slice(a, b).arrayBuffer();
     const out = new Uint8Array(b - a); let o = 0;
     for (const i of idx) {
@@ -1101,6 +1122,7 @@ class ChunkJob {
       let next = 0;
       const worker = async () => {
         while (!this.stopped) {
+          while (this.fg > 0 && !this.stopped) await sleep(150);
           while (next < this.n && (this.have.has(next) || this.pending.has(next))) next++;
           if (next >= this.n) break;
           await this.fetchChunk(next++);
@@ -1114,20 +1136,16 @@ class ChunkJob {
     return this.running;
   }
   async finish() {
-    const parts = [];
-    for (let i = 0; i < this.n; i++) { const rec = await DB.get("chunks", this.ck(i)); if (!rec) { this.have.delete(i); throw new Error("断片が足りません（もう一度開いてください）"); } parts.push(rec.b); }
-    const blob = new Blob(parts, { type: "application/epub+zip" });
-    if (blob.size !== this.size) throw new Error("大きさが合いません（PCの本が変わった可能性。一覧を読み直してください）");
+    // v0.31.2: 1冊のBlobにまとめない（iPadではBlobをしまえないことがある・150MBを一度に作るとメモリも使う）。断片のまま「保存済み」にする
+    for (let i = 0; i < this.n; i++) if (!(await DB.get("chunks", this.ck(i)).catch(() => null))) { this.have.delete(i); throw new Error("断片が足りません（もう一度開いてください）"); }
     let cover = await cachedCoverBlob(this.f.id);
     if (!cover && online) { try { const rc = await fetch(apiUrl(`/api/cover/${this.f.id}?t=${encodeURIComponent(token)}`)); if (rc.ok) { cover = await rc.blob(); putCoverBlob(this.f.id, cover); } } catch (_) {} }
     const rec = { key: this.key, fileId: this.f.id, name: this.f.name, series: this.s.title, shelf: this.s.shelf, kind: this.s.kind, site: this.s.site, variant: this.f.variant, range: this.f.range,
-      savedAt: Date.now(), lastOpened: Date.now(), pc: true, cache: !!this.cache, size: blob.size, blob };
-    await DB.put("books", rec);
+      savedAt: Date.now(), lastOpened: Date.now(), pc: true, cache: !!this.cache, size: this.size, chunked: true, chunkKey: this.key, n: this.n };
     const m = await DB.get("meta", this.key).catch(() => null);
-    await DB.put("meta", { ...(m || {}), key: this.key, cover: m?.cover || cover });
+    await DB.put("meta", { ...(m || {}), key: this.key, cover: m?.cover || await blobPack(cover) }).catch(() => {});
     await setSaved(rec);
-    this.blob = blob; this.mem.clear();
-    await DB.delIn("chunks", this.key + "|", this.key + "|\uffff").catch(() => {});
+    this.done = true;
     await setPartial(this.key, null);
     chunkJobs.delete(this.key);
     this.emit();
@@ -1137,6 +1155,23 @@ class ChunkJob {
     await DB.delIn("chunks", this.key + "|", this.key + "|\uffff").catch(() => {});
     await setPartial(this.key, null);
   }
+}
+/** 断片のまま保存した本を読む */
+function chunkSource(info) {
+  const ck = info.chunkKey || info.key, mem = new Map();
+  const get = async i => {
+    if (mem.has(i)) return mem.get(i);
+    const rec = await DB.get("chunks", `${ck}|${String(i).padStart(6, "0")}`);
+    if (!rec) throw new Error("保存データが欠けています。端末から削除して、もう一度開いてください");
+    const ab = rec.ab || await rec.b.arrayBuffer();
+    mem.set(i, ab); while (mem.size > 24) mem.delete(mem.keys().next().value);
+    return ab;
+  };
+  return { size: info.size, read: async (a, b) => {
+    const i0 = Math.floor(a / CHUNK), i1 = Math.floor((b - 1) / CHUNK), out = new Uint8Array(b - a); let o = 0;
+    for (let i = i0; i <= i1; i++) { const ab = await get(i); const cs = i * CHUNK, s0 = Math.max(a, cs) - cs, s1 = Math.min(b, cs + ab.byteLength) - cs; out.set(new Uint8Array(ab, s0, s1 - s0), o); o += s1 - s0; }
+    return out.buffer;
+  } };
 }
 async function chunkJobFor(s, f, cache) {
   let job = chunkJobs.get(f.key);
@@ -1156,6 +1191,7 @@ function runChunkJob(job, quiet) {
 }
 async function chunkSave(s, f, openAfter, asCache) {
   if (!token) { toast("PCにつながっていません"); return; }
+  warnFunnel();
   let job;
   try { job = await chunkJobFor(s, f, asCache); } catch (e) { toast(String(e.message || e)); return; }
   runChunkJob(job, false);
@@ -1165,7 +1201,7 @@ async function chunkSave(s, f, openAfter, asCache) {
 }
 /** 取り寄せながら読む: 開くのに要る分（目次・今のページ）だけ先に取る。めくったページは端末に残る */
 async function openPartial(job) {
-  if (job.blob) return openBook(job.key);
+  if (job.done) return openBook(job.key);
   LS.set("openBook", "");
   return openWith(job.key, { name: job.f.name, series: job.s.title, kind: job.s.kind }, () => new ZipReader(job.source()).open(), false, job);
 }
@@ -1191,7 +1227,7 @@ async function downloadBook(s, f, onProgress, isCache = () => false) {
     const res = await nativeDownload(fileUrl, f.name, f.size, onProgress);
     await getCover();
     const rec = { ...base, cache: !!isCache(), native: true, file: res.file, dir: res.dir, size: res.size };
-    await DB.put("meta", { key: f.key, cover }); await setSaved(rec);
+    await DB.put("meta", { key: f.key, cover: await blobPack(cover) }).catch(() => {}); await setSaved(rec);
     return;
   }
   const total = f.size || 0;
@@ -1229,7 +1265,7 @@ async function downloadBook(s, f, onProgress, isCache = () => false) {
   await getCover();
   const rec = { ...base, cache: !!isCache(), size: blob.size, blob };
   await DB.put("books", rec);
-  await DB.put("meta", { key: f.key, cover });
+  await DB.put("meta", { key: f.key, cover: await blobPack(cover) }).catch(() => {});
   await setSaved(rec);
 }
 // ---- Androidアプリ（SDカードに保存） ----
@@ -1248,6 +1284,29 @@ function nativeDownload(url, name, size, onProgress) {
 }
 function nativeCall(fn, ...args) { try { if (window.SIDNative && typeof SIDNative[fn] === "function") return SIDNative[fn](...args); } catch (_) {} return undefined; }
 const nativeFileUrl = file => `https://appassets.androidplatform.net/sd/${encodeURIComponent(file)}`;
+/** v0.31.3: SDカードの本を読む。APK 0.31.3 からはアプリに直接「何バイト目から何バイト」を頼む（fetch を使わない）。
+ *  以前は fetch(/sd/…) で読んでいて、端末によっては「Failed to fetch」で開けなかった */
+async function nativeSource(info) {
+  if (window.SIDNative && typeof SIDNative.readRange === "function") {
+    const size = info.size || Number(nativeCall("fileSize", info.file)) || 0;
+    if (!size) throw new Error("SDカードに本が見つかりません（端末から削除して、もう一度開いてください）");
+    return { size, read: async (a, b) => {
+      const out = new Uint8Array(b - a); let o = 0;
+      const STEP = 2 * 1024 * 1024;
+      while (o < out.length) {
+        const n = Math.min(STEP, out.length - o);
+        const b64 = SIDNative.readRange(info.file, String(a + o), String(n));
+        if (b64 == null || b64 === "") throw new Error("SDカードの本を読めません（端末から削除して、もう一度開いてください）");
+        const bin = atob(b64);
+        for (let i = 0; i < bin.length; i++) out[o + i] = bin.charCodeAt(i);
+        if (!bin.length) throw new Error("SDカードの本が途中で切れています");
+        o += bin.length;
+      }
+      return out.buffer;
+    } };
+  }
+  return urlSource(nativeFileUrl(info.file), info.size);
+}
 
 $("importFile").addEventListener("change", async e => {
   const files = [...e.target.files]; e.target.value = "";
@@ -1258,9 +1317,9 @@ $("importFile").addEventListener("change", async e => {
       const m = file.name.match(/^(.*?)_\d{3,}_pack/);
       let kind = "", cover = null, info = null;
       try { const book = await Book.open(copy); kind = book.kind; cover = await book.coverBlob().catch(() => null); info = { pages: book.pages, kind: book.kind, title: book.title }; book.close(); } catch (_) {}
-      const rec = { key, name: file.name, series: m ? m[1] : (info?.title || "端末で読み込んだEPUB"), shelf: "この端末", kind, variant: "", size: copy.size, savedAt: Date.now(), blob: copy };
+      const rec = { key, name: file.name, series: m ? m[1] : (info?.title || "端末で読み込んだEPUB"), shelf: "この端末", kind, variant: "", size: copy.size, savedAt: Date.now(), buf: await copy.arrayBuffer() };
       await DB.put("books", rec); await setSaved(rec);
-      await DB.put("meta", { key, cover, ...(info || {}) });
+      await DB.put("meta", { key, cover: await blobPack(cover), ...(info || {}) }).catch(() => {});
       toast(`読み込みました: ${file.name}`);
     } catch (err) { toast(`読み込みに失敗: ${file.name} ${err.message || err}`, 5000); }
   }
@@ -1284,7 +1343,7 @@ async function renderContinue() {
     const it = el("button", "contItem glass"); it.type = "button";
     const cv = coverEl("", b.series || b.name, b.kind);
     if (!saved && pf?.f?.id) coverUrlForFile(pf.f.id).then(u => { if (u) { const img = el("img"); img.alt = ""; img.onload = () => cv.querySelector(".ph")?.remove(); img.src = u; cv.append(img); } });
-    DB.get("meta", b.key).then(m => { if (m?.cover) { const img = el("img"); img.alt = ""; img.src = URL.createObjectURL(m.cover); img.onload = () => { cv.querySelector(".ph")?.remove(); URL.revokeObjectURL(img.src); }; cv.append(img); } }).catch(() => {});
+    DB.get("meta", b.key).then(m => { const cb = blobUnpack(m?.cover); if (cb) { const img = el("img"); img.alt = ""; img.src = URL.createObjectURL(cb); img.onload = () => { cv.querySelector(".ph")?.remove(); URL.revokeObjectURL(img.src); }; cv.append(img); } }).catch(() => {});
     const L = volLabel(b.name);
     const sub = [L.no, L.text].filter(Boolean).join(" ");
     const txt = el("div");
@@ -1301,7 +1360,7 @@ async function renderContinue() {
   for (const b of sorted) {
     const row = el("div", "savedRow");
     const cv = coverEl("", "", b.kind);
-    DB.get("meta", b.key).then(m => { if (m?.cover) { const img = el("img"); img.alt = ""; img.src = URL.createObjectURL(m.cover); img.onload = () => { cv.querySelector(".ph")?.remove(); URL.revokeObjectURL(img.src); }; cv.append(img); } }).catch(() => {});
+    DB.get("meta", b.key).then(m => { const cb = blobUnpack(m?.cover); if (cb) { const img = el("img"); img.alt = ""; img.src = URL.createObjectURL(cb); img.onload = () => { cv.querySelector(".ph")?.remove(); URL.revokeObjectURL(img.src); }; cv.append(img); } }).catch(() => {});
     const t = el("div"); t.append(el("div", "n", bookTitle(b.series, b.name)), el("div", "m", `${fmtMB(b.size || 0)}${b.native ? " · SDカード" : ""}${b.pc ? " · PCの本" : " · 端末のファイル"}`));
     t.style.minWidth = "0"; t.style.cursor = "pointer"; t.addEventListener("click", () => openBook(b.key));
     const del = el("button", "act"); del.type = "button"; del.setAttribute("aria-label", "端末から削除"); del.append(svgUse("i-trash"));
@@ -1558,9 +1617,10 @@ async function openBook(key) {
   let src;
   if (info.native) {
     if (!window.SIDNative) { toast("この本はAndroidアプリのSDカードに保存されています"); return; }
-    src = () => urlSource(nativeFileUrl(info.file), info.size).then(u => new ZipReader(u).open());
+    src = () => nativeSource(info).then(u => new ZipReader(u).open());
   } else {
-    src = async () => { const rec = await DB.get("books", key); if (!rec?.blob) throw new Error("保存データが見つかりません。もう一度保存してください"); return rec.blob; };
+    src = info.chunked ? (async () => new ZipReader(chunkSource(info)).open())
+      : async () => { const rec = await DB.get("books", key); const b = rec?.blob || (rec?.buf ? new Blob([rec.buf], { type: "application/epub+zip" }) : null); if (!b) throw new Error("保存データが見つかりません。もう一度保存してください"); return b; };
   }
   return openWith(key, info, src);
 }
@@ -1578,7 +1638,7 @@ async function openWith(key, rec, getSrc, streaming = false, partial = null) {
   try {
     const meta = await DB.get("meta", key).catch(() => null);
     const book = await Book.open(await getSrc(), meta?.kind ? { kind: meta.kind, pages: meta.pages } : (meta?.pages ? { kind: "manga", pages: meta.pages } : null));
-    if (!meta?.kind) { try { await DB.put("meta", { ...(meta || { key }), key, pages: book.pages, kind: book.kind, title: book.title, cover: meta?.cover || (streaming ? null : await book.coverBlob().catch(() => null)) }); } catch (_) {} }
+    if (!meta?.kind) { try { await DB.put("meta", { ...(meta || { key }), key, pages: book.pages, kind: book.kind, title: book.title, cover: meta?.cover || (streaming ? null : await blobPack(await book.coverBlob().catch(() => null))) }); } catch (_) {} }
     R.book = book; R.key = key; R.rec = rec; R.title = rec.name; R.streaming = streaming; R.partial = partial;
     $("rTitle").textContent = bookTitle(rec.series, rec.name) + (streaming ? "（PCから）" : partial ? `（取り寄せ中 ${Math.round(partial.p * 100)}%）` : "");
     if (partial) partial.onProgress = p => { if (R.partial === partial) $("rTitle").textContent = bookTitle(rec.series, rec.name) + (p >= 1 ? "" : `（取り寄せ中 ${Math.round(p * 100)}%）`); };
@@ -1638,7 +1698,11 @@ async function show() {
   const spread = v.length === 2;
   stage.classList.toggle("spread", spread);
   const order = spread ? (prefs.dir === "rtl" ? [v[1], v[0]] : [v[0], v[1]]) : [v[0]];
-  const urls = await Promise.all(order.map(i => R.book.url(i)));
+  const spinT = setTimeout(() => { if (seq === showSeq) $("rLoading").classList.remove("hidden"); }, 350);
+  let urls;
+  try { urls = await Promise.all(order.map(i => R.book.url(i))); }
+  catch (e) { clearTimeout(spinT); $("rLoading").classList.add("hidden"); if (seq === showSeq) toast("ページを読めませんでした: " + (e.message || e), 5000); return; }
+  clearTimeout(spinT); if (seq === showSeq) $("rLoading").classList.add("hidden");
   if (seq !== showSeq) return;
   A.src = urls[0]; A.classList.remove("hidden");
   if (spread) { B.src = urls[1]; B.classList.remove("hidden"); } else { B.removeAttribute("src"); B.classList.add("hidden"); }
@@ -1648,7 +1712,7 @@ async function show() {
   saveProgress({ page: R.page, pages: R.book.pages.length });
   const near = [];
   for (let d = 1; d <= 3; d++) { const a = R.views[R.vi + d], b = R.views[R.vi - d]; if (a) near.push(...a); if (b && d <= 1) near.push(...b); }
-  if (R.partial && !R.partial.blob) for (let d = 4; d <= 8; d++) { const a = R.views[R.vi + d]; if (a) near.push(...a); }
+  if (R.partial && !R.partial.done) for (let d = 4; d <= 8; d++) { const a = R.views[R.vi + d]; if (a) near.push(...a); }
   near.forEach(i => R.book.url(i).then(u => { if (R.book?.remote) { const im = new Image(); im.decoding = "async"; im.src = u; } }).catch(() => {}));
   R.book.trim(R.page, 10);
 }
@@ -2228,6 +2292,10 @@ function renderConn() {
   const pcHost = apiBase ? apiBase.replace(/^https?:\/\//, "") : location.host;
   row(online ? true : token ? false : null, "PC（本の一覧と保存）", online ? `つながっています（${pcHost}）${serverInfo?.readerRoot ? `\n本棚: ${serverInfo.readerRoot}` : ""}` : token ? `${netState.pcText}。PC・Firefox・helperの起動と、Tailscaleを確認` : "PCの「スマホ連携」のQRコードを読むとつながります");
   if (online && serverInfo) row(true, "PCへの道", serverInfo.publicMode === "public" ? "インターネットから（このスマホにTailscaleは不要）" : "Tailscale（このスマホにもTailscaleが必要）");
+  if (online && serverInfo?.via) {
+    const viaFunnel = /Funnel/.test(serverInfo.via);
+    row(viaFunnel ? false : true, "いまの経路", viaFunnel ? `${serverInfo.via}＝中継を通るので遅い\nこの端末のTailscaleをON（設定の「Tailscale DNSを使う」もON）にしてから、このアプリを完全に閉じて開き直すと直接（速い）になります` : `${serverInfo.via}（直接・速い）`);
+  }
   row(gistOn() ? (ghState.ok === false ? false : true) : null, "GitHub（PCを通さずに同期・依頼）", gistOn() ? (ghState.ok === false ? ghState.err : ghState.at ? `最終同期 ${new Date(ghState.at).toLocaleTimeString("ja-JP")}` : "設定済み") : "PCで「GitHubでつなぐ」を設定してからQRを読み直すと使えます");
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   row(standalone ? true : null, "ホーム画面のアプリ", standalone ? "アプリとして開いています" : /iPad|iPhone/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ? "共有ボタン → ホーム画面に追加" : "メニュー → アプリをインストール（またはホーム画面に追加）");
@@ -2397,7 +2465,7 @@ async function refreshCurrentView() {
   let y0 = null, x0 = 0, d = 0, busy = false;
   const blocked = () => !$("reader").classList.contains("hidden") || !!document.querySelector(".sheet:not(.hidden)") || $("dock").classList.contains("open");
   const place = v => { ind.style.transform = `translate(-50%, ${v - 56}px) rotate(${v * 3}deg)`; ind.style.opacity = String(Math.min(1, v / PULL)); };
-  const reset = () => { ind.classList.remove("show", "ready", "spin"); ind.style.transform = ""; ind.style.opacity = ""; d = 0; };
+  const reset = () => { ind.classList.remove("show", "ready", "busy"); ind.style.transform = ""; ind.style.opacity = ""; d = 0; };
   addEventListener("touchstart", e => {
     if (busy || e.touches.length !== 1 || scrollY > 0 || blocked()) { y0 = null; return; }
     y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; d = 0;
@@ -2413,7 +2481,8 @@ async function refreshCurrentView() {
     if (y0 == null) return;
     y0 = null;
     if (d < PULL || blocked()) { reset(); return; }
-    busy = true; ind.classList.add("spin"); place(PULL);
+    // v0.31.3: 読み込み中は上の真ん中に固定（以前は .spin（ページ待ちのぐるぐる）と同じ名前で、丸ごと回って動いて見えていた）
+    busy = true; ind.style.transform = ""; ind.style.opacity = ""; ind.classList.add("busy");
     try { await refreshCurrentView(); } catch (e) { toast(String(e.message || e)); }
     finally { busy = false; reset(); }
   }, { passive: true });
