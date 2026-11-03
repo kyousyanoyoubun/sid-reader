@@ -1,11 +1,11 @@
-/* ℜ Reader v0.24 — PC（D:\epub）の本を読む・端末に保存する・PCへ依頼する PWA
+/* SID（旧 ℜ Reader）v0.24 — PC（D:\epub）の本を読む・端末に保存する・PCへ依頼する PWA
  * - 本棚は「PCの本」が基本。端末に保存した本もPCの本として（✓付きで）表示する
  * - 漫画（画像EPUB）と小説（文章EPUB・縦書き/横書き）を読める
  * - EPUBはZIPを部分読み（Blob.slice + DecompressionStream）するので、200MBでもメモリに全展開しない
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.34.0";
+const APP_VERSION = "0.35.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // v0.34: iPadは左上にウィンドウのボタンが重なるので、上のバーを少し下げる（app.css の html.ipad）
@@ -20,6 +20,8 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem("sid." + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
   set(k, v) { try { localStorage.setItem("sid." + k, JSON.stringify(v)); } catch (_) {} }
 };
+// v0.35: 小説の既定を ReadEra 風に（ベージュの背景＋ Noto Serif JP）。いちどだけ切り替える（あとは自由に変えられる）
+if (!LS.get("ui035", false)) { LS.set("ui035", true); LS.set("tbg", "beige"); LS.set("tfont", "x:Noto Serif JP"); }
 const prefs = {
   dir: LS.get("dir", "rtl"), spread: LS.get("spread", "auto"), coverSingle: LS.get("coverSingle", true), sync: LS.get("sync", true),
   // v0.31: 既定は「タップした巻を端末にキャッシュしてから読む」。PCから直接読む（ストリーム）は設定でON
@@ -27,7 +29,8 @@ const prefs = {
   // v0.24: 小説の表示
   tbg: LS.get("tbg", "auto"), tfont: LS.get("tfont", "mincho"), tlh: LS.get("tlh", 1.85), tpad: LS.get("tpad", 1), tweight: LS.get("tweight", "400"),
   tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto"),
-  flow: LS.get("flow", "page"),   // v0.34: 漫画の読み方 page=めくる / scroll=縦につなげてスクロール
+  flow: LS.get("flow", "page"),
+  rbar: LS.get("rbar", "cyan"),   // v0.35: 読書画面のメニュー（上下のバー）の色   // v0.34: 漫画の読み方 page=めくる / scroll=縦につなげてスクロール
   showAdult: LS.get("showAdult", false)   // v0.29.3: 成人漫画は基本表示しない（設定で表示）
 };
 function setPref(k, v) { prefs[k] = v; LS.set(k, v); }
@@ -1618,6 +1621,10 @@ const Book = {
     const spineEl = opf.getElementsByTagName("spine")[0];
     const rtl = (spineEl?.getAttribute("page-progression-direction") || "") === "rtl";
     const title = (opf.getElementsByTagName("dc:title")[0] || opf.getElementsByTagNameNS("*", "title")[0])?.textContent || "";
+    const author = [...opf.getElementsByTagName("dc:creator"), ...opf.getElementsByTagNameNS("http://purl.org/dc/elements/1.1/", "creator")].map(x => x.textContent.trim()).filter((v, i, a) => v && a.indexOf(v) === i).join("、");
+    // v0.35: 目次（EPUB3の nav か、EPUB2の toc.ncx）
+    const navItem = [...items.values()].find(x => /\bnav\b/.test(x.props));
+    const ncxItem = items.get(spineEl?.getAttribute("toc") || "") || [...items.values()].find(x => /dtbncx/.test(x.type));
     const docs = [...(spineEl?.getElementsByTagName("itemref") || [])].map(r => items.get(r.getAttribute("idref"))).filter(Boolean);
     let kind = cached?.kind || "";
     let pages = cached?.pages || null;
@@ -1661,7 +1668,35 @@ const Book = {
     const urls = new Map();
     const res = new Map(); // 小説: 中の画像・CSS
     return {
-      title, rtl, kind, pages: kind === "manga" ? pages : null, zip,
+      title, author, rtl, kind, pages: kind === "manga" ? pages : null, zip,
+      async toc() {
+        const docList = this.docs; const idxOf = href => { const h = href.split("#")[0]; return docList.findIndex(d => d.href === h); };
+        const out = [];
+        try {
+          if (navItem && zip.has(navItem.href)) {
+            const nd = new DOMParser().parseFromString(await zip.text(navItem.href), "application/xhtml+xml");
+            const navs = [...nd.getElementsByTagNameNS("*", "nav")];
+            const nav = navs.find(n => /toc/.test(n.getAttributeNS("http://www.idpf.org/2007/ops", "type") || n.getAttribute("epub:type") || "")) || navs[0];
+            const walk = (ol, depth) => { for (const li of [...ol.children].filter(x => x.localName === "li")) {
+              const a = [...li.children].find(x => x.localName === "a" || x.localName === "span");
+              const href = a?.getAttribute("href");
+              if (a && href) { const di = idxOf(posixJoin(dirOf(navItem.href), decodeURIComponent(href))); if (di >= 0) out.push({ title: a.textContent.replace(/\s+/g, " ").trim(), di, sub: depth > 0 }); }
+              const sub = [...li.children].find(x => x.localName === "ol"); if (sub) walk(sub, depth + 1);
+            } };
+            const ol = nav && [...nav.getElementsByTagNameNS("*", "ol")][0]; if (ol) walk(ol, 0);
+          }
+          if (!out.length && ncxItem && zip.has(ncxItem.href)) {
+            const nd = new DOMParser().parseFromString(await zip.text(ncxItem.href), "application/xml");
+            const walk = (node, depth) => { for (const np of [...node.children].filter(x => x.localName === "navPoint")) {
+              const label = [...np.getElementsByTagNameNS("*", "text")][0]?.textContent || ""; const src = [...np.getElementsByTagNameNS("*", "content")][0]?.getAttribute("src");
+              if (src) { const di = idxOf(posixJoin(dirOf(ncxItem.href), decodeURIComponent(src))); if (di >= 0) out.push({ title: label.replace(/\s+/g, " ").trim(), di, sub: depth > 0 }); }
+              walk(np, depth + 1);
+            } };
+            const map = [...nd.getElementsByTagNameNS("*", "navMap")][0]; if (map) walk(map, 0);
+          }
+        } catch (_) {}
+        return out.filter(t => t.title).sort((a, b) => a.di - b.di);
+      },
       docs: docs.filter(d => /x?html/.test(d.type) || /\.x?html?$/i.test(d.href)),
       remote: !!zip.urlOf,
       async url(i) {
@@ -1753,6 +1788,9 @@ async function openWith(key, rec, getSrc, streaming = false, partial = null) {
       try { const all = (await Promise.race([api("/api/progress", { timeout: 4000 }), sleep(1500).then(() => ({}))])).progress || {}; for (const [k, sp] of Object.entries(all)) if ((k === key || sp.title === rec.name) && (!best || sp.at > best.at)) best = sp; } catch (_) {}
     }
     const textMode = book.kind === "text";
+    $("reader").classList.toggle("isText", textMode); $("rTocBtn").classList.toggle("hidden", !textMode); closeToc();
+    $("rAuthor").textContent = book.author || ""; $("rSection").textContent = "";
+    R.toc = []; R.tl = null; R.tlSum = 0; R.cpp = 0;
     $("stage").classList.toggle("textMode", textMode); $("textFrame").classList.toggle("hidden", !textMode);
     $("rWm").classList.toggle("hidden", !textMode);
     ["rSpread", "rDir", "rFlow"].forEach(id => $(id).classList.toggle("hidden", textMode));
@@ -1760,6 +1798,16 @@ async function openWith(key, rec, getSrc, streaming = false, partial = null) {
     $("rPanel").classList.toggle("text", textMode); closePanel();
     $("reader").style.background = textMode ? textColors().bg : mangaBg();
     if (textMode) {
+      // v0.35: フォルダのフォントの一覧（はじめて・一覧が空のときだけ待つ）
+      if (String(prefs.tfont).startsWith("x:") && !folderFontOf(prefs.tfont)) await loadFolderFonts(true); else loadFolderFonts().catch(() => {});
+      R.toc = await Promise.race([book.toc().catch(() => []), sleep(3000).then(() => [])]);
+      const lensFor = book;
+      loadTextLens(book, key).then(tl => {
+        if (!tl || R.book !== lensFor) return;
+        R.tl = tl; R.tlSum = tl.reduce((a, b) => a + b, 0);
+        if (tl[R.di] > 300 && R.pn > 1) R.cpp = tl[R.di] / R.pn;   // 短い章（表紙など）のときは、本文の章を開いたときに決まる
+        if (!R.loading) { textShow(R.pi); renderTicks(); }
+      });
       let d = 0, f = 0;
       if (best && best.d != null) { d = Math.min(book.docs.length - 1, best.d); f = best.f || 0; }
       else if (best && best.pages) { const pos = best.page / best.pages * book.docs.length; d = Math.min(book.docs.length - 1, Math.floor(pos)); f = pos - d; }
@@ -1909,7 +1957,8 @@ const TBG = {
   auto: { name: "テーマ" },
   white: { name: "白", bg: "#ffffff", fg: "#1b1b1b", link: "#245" },
   paper: { name: "紙", bg: "#f6f4ef", fg: "#1c1c1c", link: "#246" },
-  beige: { name: "ベージュ", bg: "#f1e7d0", fg: "#3a3024", link: "#5a4320" },
+  beige: { name: "ベージュ", bg: "#f6e2c7", fg: "#2b2117", link: "#5a4320" },   // v0.35: ReadEra のベージュ
+  cream: { name: "クリーム", bg: "#f5eedc", fg: "#2d2a22", link: "#5a4320" },
   sepia: { name: "セピア", bg: "#e6d3ad", fg: "#43331d", link: "#5b3d12" },
   mint: { name: "ミント", bg: "#dfeadb", fg: "#1f2b20", link: "#24502e" },
   gray: { name: "グレー", bg: "#3b3e44", fg: "#dadad6", link: "#a9c0d8" },
@@ -1927,7 +1976,103 @@ const FONTS = {
   maru: { name: "丸ゴシック", stack: `"Zen Maru Gothic","Hiragino Maru Gothic ProN",${SANS}`, gf: "Zen+Maru+Gothic:wght@300;400;700" },
   klee: { name: "手書き風", stack: `"Klee One",${SERIF}`, gf: "Klee+One:wght@400;600" }
 };
-const fontOf = () => FONTS[prefs.tfont] || FONTS.mincho;
+// v0.35: PCの READER/fonts に置いたフォント（prefs.tfont = "x:家族名"）。一度取り寄せたら端末（IndexedDB）に持つのでオフラインでも使える
+let folderFonts = LS.get("folderFonts", []);   // [{ family, label, files: [{ path, weight, style, size, mtime }] }]
+const fontCssName = fam => "SID " + fam;
+const fontsUrl = path => baseNow() + "/app/fonts/" + String(path).split("/").map(encodeURIComponent).join("/");
+let folderFontsAt = 0;
+async function loadFolderFonts(force = false) {
+  if (!force && Date.now() - folderFontsAt < 60000) return folderFonts;
+  folderFontsAt = Date.now();
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch(fontsUrl("index.json"), { cache: "no-store", signal: ctl.signal }); clearTimeout(tm);
+    const j = await r.json();
+    if (j && j.ok && Array.isArray(j.fonts)) { folderFonts = j.fonts; LS.set("folderFonts", folderFonts); }
+  } catch (_) {}
+  return folderFonts;
+}
+const folderFontOf = key => { if (!String(key || "").startsWith("x:")) return null; const fam = key.slice(2).toLowerCase(); return folderFonts.find(f => String(f.family).toLowerCase() === fam) || null; };
+function fontOf() {
+  const k = prefs.tfont;
+  if (String(k).startsWith("x:")) {
+    const ff = folderFontOf(k);
+    if (ff) return { name: ff.label || ff.family, stack: `"${fontCssName(ff.family)}",${SERIF}`, folder: ff };
+    // フォルダに無い（まだ一覧を取れていない・PCにつながらない）ときは、同じ書体のWebフォント／端末の明朝
+    return FONTS.mincho;
+  }
+  return FONTS[k] || FONTS.mincho;
+}
+const FONT_MIME = { woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf", otf: "font/otf", ttc: "font/collection" };
+const FONT_FMT = { woff2: "woff2", woff: "woff", ttf: "truetype", otf: "opentype", ttc: "collection" };
+const fontUrlCache = new Map();   // id -> Promise<blob URL>
+const fontId = f => `font:${f.path}:${f.size}:${f.mtime}`;
+function fontFileUrl(f) {
+  const id = fontId(f);
+  if (fontUrlCache.has(id)) return fontUrlCache.get(id);
+  const pr = (async () => {
+    const ext = (f.path.split(".").pop() || "").toLowerCase();
+    let ab = null;
+    try { const m = await DB.get("meta", id); if (m?.ab) ab = m.ab; } catch (_) {}
+    if (!ab) {
+      const r = await fetch(fontsUrl(f.path));
+      if (!r.ok) throw new Error("フォントを取り寄せられませんでした");
+      ab = await r.arrayBuffer();
+      // 同じファイルの古い版は消す
+      try { for (const k of await DB.keysIn("meta", `font:${f.path}:`, `font:${f.path}:\uffff`)) if (k !== id) await DB.del("meta", k); } catch (_) {}
+      DB.put("meta", { key: id, ab, at: Date.now() }).catch(() => {});
+    }
+    return URL.createObjectURL(new Blob([ab], { type: FONT_MIME[ext] || "font/otf" }));
+  })();
+  pr.catch(() => fontUrlCache.delete(id));
+  fontUrlCache.set(id, pr);
+  return pr;
+}
+const fontIsCached = async f => fontUrlCache.has(fontId(f)) || !!(await DB.get("meta", fontId(f)).catch(() => null));
+function faceCss(ff, f, url) {
+  const ext = (f.path.split(".").pop() || "").toLowerCase();
+  return `@font-face{font-family:"${fontCssName(ff.family)}";src:url("${url}") format("${FONT_FMT[ext] || "opentype"}");font-weight:${f.weight || 400};font-style:${f.style || "normal"};font-display:block}`;
+}
+/** 選んだ太さに近いファイルを先に（待つ）、残りは裏で取り寄せる。返り値 = @font-face のCSS（取れた分だけ） */
+async function folderFontCss(ff, wantWeight) {
+  const files = [...(ff.files || [])].sort((a, b) => Math.abs((a.weight || 400) - wantWeight) - Math.abs((b.weight || 400) - wantWeight));
+  if (!files.length) return "";
+  const first = await fontFileUrl(files[0]);
+  const css = [faceCss(ff, files[0], first)];
+  for (const f of files.slice(1)) {
+    if (await fontIsCached(f)) { try { css.push(faceCss(ff, f, await fontFileUrl(f))); } catch (_) {} }
+    else fontFileUrl(f).catch(() => {});   // 次の章から使われる
+  }
+  addParentFontCss(css.join("\n"));
+  return css.join("\n");
+}
+// 設定パネルの見本にも使えるように、本棚側（親のページ）にも同じ @font-face を足す
+const parentFontCss = new Set();
+function addParentFontCss(css) {
+  for (const line of css.split("\n")) { if (!line || parentFontCss.has(line)) continue; parentFontCss.add(line); }
+  let st = $("folderFontFaces"); if (!st) { st = document.createElement("style"); st.id = "folderFontFaces"; document.head.append(st); }
+  st.textContent = [...parentFontCss].join("\n");
+}
+// v0.35: メニュー（上下のバー）の色
+const RBAR = {
+  cyan: { name: "シアン", c: "#005c75", acc: "#39b5d6" },
+  teal: { name: "青緑", c: "#00695c", acc: "#4cc2b0" },
+  navy: { name: "紺", c: "#1f3b63", acc: "#79a6e8" },
+  indigo: { name: "藍", c: "#3a3f8f", acc: "#9aa0ff" },
+  green: { name: "緑", c: "#2f5a35", acc: "#7cc887" },
+  brown: { name: "茶", c: "#5b4330", acc: "#d8a777" },
+  wine: { name: "えんじ", c: "#7a2e3a", acc: "#f08a9a" },
+  gray: { name: "グレー", c: "#45494f", acc: "#a8b3c0" },
+  black: { name: "黒", c: "#141414", acc: "#9aa4ad" },
+  glass: { name: "ガラス", c: "" }
+};
+function applyBarColor() {
+  const r = $("reader"); const b = RBAR[prefs.rbar] || RBAR.cyan;
+  r.classList.toggle("glassBars", !b.c);
+  if (b.c) { r.style.setProperty("--rb", b.c); r.style.setProperty("--rpAcc", b.acc); }
+  else { r.style.removeProperty("--rb"); r.style.removeProperty("--rpAcc"); }
+}
+applyBarColor();
 const gfUrl = (fams, text) => `https://fonts.googleapis.com/css2?${fams.map(f => "family=" + f).join("&")}&display=swap${text ? "&text=" + encodeURIComponent(text) : ""}`;
 function textColors() {
   const t = TBG[prefs.tbg];
@@ -1965,26 +2110,35 @@ function frameLoad(html) {
     f.srcdoc = html;
   });
 }
-const PAD = () => Math.round(Math.min(innerWidth, innerHeight) * 0.06 * (Number(prefs.tpad) || 1)) + 6;
+const PAD = () => Math.round(Math.min(R.W || innerWidth, R.H || innerHeight) * 0.06 * (Number(prefs.tpad) || 1)) + 6;
+// v0.35: 本文の枠は整数pxに固定し、ページ送りは scrollLeft/scrollTop ではなく transform で動かす。
+// （以前は画面の幅と本文の枠の幅が少し違ったり、Safari が勝手にスクロール位置を直したりして、文字が右下・左上に寄ることがあった）
+function frameBox() {
+  const r = $("reader").getBoundingClientRect();
+  return { W: Math.max(200, Math.floor(r.width || innerWidth)), H: Math.max(200, Math.floor(r.height || innerHeight)) };
+}
 function textStyle(vertical, forced) {
   const c = textColors(); const P = PAD(); const fam = fontOf().stack;
-  const W = innerWidth, H = innerHeight;
-  const wm = forced ? `html,body{writing-mode:${vertical ? "vertical-rl" : "horizontal-tb"}!important;-webkit-writing-mode:${vertical ? "vertical-rl" : "horizontal-tb"}!important}` : "";
-  const cols = vertical
-    ? `body{width:${W}px!important;height:${H}px!important;column-width:${H - 2 * P}px!important;column-gap:${2 * P}px!important;}`
-    : `body{width:${W}px!important;height:${H}px!important;column-width:${W - 2 * P}px!important;column-gap:${2 * P}px!important;}`;
+  const W = R.W, H = R.H;
+  const wmv = vertical ? "vertical-rl" : "horizontal-tb";
+  const wm = forced ? `html,body{writing-mode:${wmv}!important;-webkit-writing-mode:${wmv}!important}` : "";
+  const cw = vertical ? H - 2 * P : W - 2 * P;
   return `${wm}
-html{margin:0!important;padding:0!important;overflow:hidden!important;background:${c.bg}!important;color:${c.fg}!important;-webkit-text-size-adjust:100%!important}
-body{margin:0!important;padding:${P}px!important;box-sizing:border-box!important;column-fill:auto!important;background:transparent!important;color:inherit!important;
+html{margin:0!important;padding:0!important;overflow:hidden!important;width:${W}px!important;height:${H}px!important;max-width:none!important;max-height:none!important;background:${c.bg}!important;color:${c.fg}!important;-webkit-text-size-adjust:100%!important;text-size-adjust:100%!important;overflow-anchor:none!important}
+body{position:absolute!important;left:0!important;top:0!important;right:auto!important;bottom:auto!important;margin:0!important;padding:${P}px!important;box-sizing:border-box!important;
+ width:${W}px!important;height:${H}px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;
+ column-width:${cw}px!important;column-gap:${2 * P}px!important;column-count:auto!important;column-fill:auto!important;column-rule:none!important;
+ -webkit-column-width:${cw}px!important;-webkit-column-gap:${2 * P}px!important;
+ background:transparent!important;color:inherit!important;overflow:visible!important;transform-origin:0 0!important;will-change:transform;overflow-anchor:none!important;
  ${fam ? `font-family:${fam}!important;` : ""}font-size:${prefs.font}px!important;line-height:${Number(prefs.tlh) || 1.85}!important;font-weight:${prefs.tweight || 400};word-break:normal;line-break:strict;overflow-wrap:anywhere;${prefs.tjust ? "text-align:justify;text-justify:inter-character;" : ""}}
 ${fam ? `p,div,span,li,dd,dt,blockquote,h1,h2,h3,h4,h5,h6,a,ruby,em,strong{font-family:${fam}!important}` : ""}
 ${prefs.toverride ? `body *{color:inherit!important;font-family:inherit!important;background:transparent!important;line-height:inherit!important}` : ""}
 p{line-height:inherit}
-${cols}
 body *{max-width:none}
-img,svg,video{max-width:${(vertical ? W : W) - 2 * P}px!important;max-height:${H - 2 * P}px!important;object-fit:contain;break-inside:avoid}
+img,svg,video{max-width:${W - 2 * P}px!important;max-height:${H - 2 * P}px!important;object-fit:contain;break-inside:avoid}
 p,div{background:transparent!important}
 a{color:${c.link}!important}
+#__rend{display:inline!important;font-size:1px!important;line-height:1px!important}
 ::selection{background:rgba(120,140,180,.35)}`;
 }
 async function textLoad(di, where = {}) {
@@ -1992,9 +2146,26 @@ async function textLoad(di, where = {}) {
   R.loading = true;
   try {
     R.di = Math.max(0, Math.min(R.book.docs.length - 1, di));
+    const box = frameBox(); R.W = box.W; R.H = box.H;
+    const tf = $("textFrame"); tf.style.width = R.W + "px"; tf.style.height = R.H + "px";
+    const F = fontOf();
+    let faceCssText = "";
+    if (F.folder) {
+      // 初めて使うフォントはPCから取り寄せる（端末に保存。次からはすぐ）
+      const want = Number(prefs.tweight) || 400;
+      const pr = folderFontCss(F.folder, want);
+      const quick = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(350).then(() => null)]);
+      if (quick) faceCssText = quick.c;
+      else {
+        toast("フォントを取り寄せています…", 8000);
+        const r2 = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(12000).then(() => null)]);
+        if (r2) faceCssText = r2.c;
+        else { const at = R.key; pr.then(() => { if (R.book && R.key === at && R.book.kind === "text" && !R.loading) textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); }).catch(() => {}); }
+      }
+    }
     const html = await buildDocHtml(R.di);
     await frameLoad(html);
-    const fd = $("textFrame").contentDocument;
+    const fd = tf.contentDocument;
     if (!fd) throw new Error("本文を表示できません");
     // 書き方向: 設定（本のまま=本のCSS / OPFのページ送り方向）
     let vertical;
@@ -2005,12 +2176,18 @@ async function textLoad(di, where = {}) {
       vertical = /vertical/.test(wmHtml) || /vertical/.test(wmBody);
     }
     R.vertical = vertical;
-    const st = fd.createElement("style"); st.id = "__rstyle"; st.textContent = textStyle(vertical, prefs.wm !== "auto" || (vertical && !/vertical/.test(getComputedStyle(fd.documentElement).writingMode)));
+    const st = fd.createElement("style"); st.id = "__rstyle";
+    st.textContent = faceCssText + "\n" + textStyle(vertical, prefs.wm !== "auto" || (vertical && !/vertical/.test(getComputedStyle(fd.documentElement).writingMode)));
     (fd.head || fd.documentElement).append(st);
+    if (fd.body) { const end = fd.createElement("span"); end.id = "__rend"; end.textContent = "​"; fd.body.append(end); }
+    // スクロール位置はいつも 0（ページは transform で動かす）。ブラウザが勝手に動かしても戻す
+    const se0 = fd.scrollingElement || fd.documentElement;
+    fd.addEventListener("scroll", () => { if (se0.scrollTop || se0.scrollLeft) { se0.scrollTop = 0; se0.scrollLeft = 0; } }, { passive: true });
     // Webフォントは読み込みを待ってからページに分ける（途中で字の幅が変わると位置がずれる）
     const fl = fd.getElementById("__rfont");
     if (fl && !fl.sheet) await Promise.race([new Promise(r => { fl.addEventListener("load", r, { once: true }); fl.addEventListener("error", r, { once: true }); }), sleep(2500)]);
-    if (fl && fd.fonts?.load) { const fam = (fontOf().stack.match(/^"([^"]+)"/) || [])[1]; if (fam) await Promise.race([Promise.all([fd.fonts.load(`${prefs.font}px "${fam}"`, "あ永"), fd.fonts.load(`600 ${prefs.font}px "${fam}"`, "あ")]).catch(() => {}), sleep(3000)]); }
+    const famName = (F.stack.match(/^"([^"]+)"/) || [])[1];
+    if ((fl || faceCssText) && fd.fonts?.load && famName) await Promise.race([Promise.all([fd.fonts.load(`${prefs.font}px "${famName}"`, "あ永"), fd.fonts.load(`600 ${prefs.font}px "${famName}"`, "あ")]).catch(() => {}), sleep(4000)]);
     await (fd.fonts?.ready || Promise.resolve());
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const imgs = [...fd.images].filter(i => !i.complete);
@@ -2020,27 +2197,123 @@ async function textLoad(di, where = {}) {
     if (where.end) pi = R.pn - 1;
     else if (where.frac) pi = Math.min(R.pn - 1, Math.round(where.frac * R.pn));
     else if (where.page != null) pi = Math.min(R.pn - 1, where.page);
+    if (R.tl && R.tl[R.di] > 300 && R.pn > 1) R.cpp = R.tl[R.di] / R.pn;   // 1ページあたりの字数（本全体のページ数の見積もりに使う）
     textShow(pi);
     $("rWm").textContent = { auto: "本のまま", vertical: "縦書き", horizontal: "横書き" }[prefs.wm];
-    $("textFrame").style.background = textColors().bg; $("reader").style.background = textColors().bg;
-    $("rSlider").classList.toggle("ltr", !(vertical || R.book.rtl));
+    tf.style.background = textColors().bg; $("reader").style.background = textColors().bg;
+    const rtlSlide = vertical;   // 横書きは左から右へ
+    $("rSlider").classList.toggle("ltr", !rtlSlide); $("rTicks").classList.toggle("rtl", rtlSlide);
+    renderTicks();
   } finally { R.loading = false; }
 }
 function textMeasure() {
   const fd = $("textFrame").contentDocument; const se = fd.scrollingElement || fd.documentElement;
-  if (R.vertical) { R.step = innerHeight; R.pn = Math.max(1, Math.round(se.scrollHeight / R.step)); }
-  else { R.step = innerWidth; R.pn = Math.max(1, Math.round(se.scrollWidth / R.step)); }
+  se.scrollTop = 0; se.scrollLeft = 0;
+  if (fd.body) fd.body.style.setProperty("transform", "none", "important");
+  const end = fd.getElementById("__rend");
+  const r = end ? end.getBoundingClientRect() : null;
+  if (R.vertical) {
+    R.step = R.H;
+    const byEnd = r && (r.width || r.height) ? Math.floor(Math.max(0, r.top) / R.H) + 1 : 0;
+    R.pn = Math.max(1, byEnd || Math.round(se.scrollHeight / R.step));
+  } else {
+    R.step = R.W;
+    const byEnd = r && (r.width || r.height) ? Math.floor(Math.max(0, r.left) / R.W) + 1 : 0;
+    R.pn = Math.max(1, byEnd || Math.round(se.scrollWidth / R.step));
+  }
 }
 function textShow(pi) {
-  const fd = $("textFrame").contentDocument; const se = fd?.scrollingElement || fd?.documentElement; if (!se) return;
+  const fd = $("textFrame").contentDocument; const se = fd?.scrollingElement || fd?.documentElement; if (!se || !fd.body) return;
   R.pi = Math.max(0, Math.min(R.pn - 1, pi));
-  if (R.vertical) se.scrollTop = R.pi * R.step; else se.scrollLeft = R.pi * R.step;
-  const n = R.book.docs.length;
-  const pos = (R.di + (R.pn > 1 ? R.pi / R.pn : 0)) / n;
-  $("rPage").textContent = `${Math.round(pos * 100)}%  ·  ${R.pi + 1}/${R.pn}`;
-  $("rSlider").min = "0"; $("rSlider").max = "1000"; $("rSlider").value = String(Math.round(pos * 1000));
+  se.scrollTop = 0; se.scrollLeft = 0;
+  fd.body.style.setProperty("transform", R.vertical ? `translate3d(0,${-R.pi * R.step}px,0)` : `translate3d(${-R.pi * R.step}px,0,0)`, "important");
+  const pos = textPos();
+  const pg = bookPages();
+  if (pg) {
+    $("rPage").textContent = `${pg.cur} / ${pg.total}`;
+    $("rSlider").min = "1"; $("rSlider").max = String(pg.total); $("rSlider").value = String(pg.cur);
+  } else {
+    $("rPage").textContent = `${Math.round(pos * 100)}%`;
+    $("rSlider").min = "0"; $("rSlider").max = "1000"; $("rSlider").value = String(Math.round(pos * 1000));
+  }
+  $("rSection").textContent = sectionLabel();
   saveProgress({ page: Math.round(pos * 1000), pages: 1000, d: R.di, f: R.pn > 1 ? R.pi / R.pn : 0 });
 }
+// ---- v0.35: 本全体のページ数（章ごとの字数から見積もる）・目次・章の名前 ----
+function textPos() {
+  const n = R.book.docs.length; const inDoc = R.pn > 1 ? R.pi / R.pn : 0;
+  if (R.tl && R.tlSum > 0) { let before = 0; for (let i = 0; i < R.di; i++) before += R.tl[i]; return Math.min(1, (before + inDoc * R.tl[R.di]) / R.tlSum); }
+  return (R.di + inDoc) / n;
+}
+const docPages = i => i === R.di ? R.pn : Math.max(1, Math.round((R.tl[i] || 0) / R.cpp));
+function bookPages() {
+  if (!R.tl || !R.cpp) return null;
+  let before = 0, total = 0;
+  for (let i = 0; i < R.tl.length; i++) { const p = docPages(i); if (i < R.di) before += p; total += p; }
+  return { cur: before + R.pi + 1, total };
+}
+async function textJumpPage(p) {
+  let acc = 0;
+  for (let i = 0; i < R.tl.length; i++) {
+    const n = docPages(i);
+    if (p <= acc + n || i === R.tl.length - 1) {
+      const within = Math.max(0, p - acc - 1);
+      if (i === R.di) { textShow(within); return; }
+      await textLoad(i, { frac: n > 1 ? within / n : 0 }); return;
+    }
+    acc += n;
+  }
+}
+function renderTicks() {
+  const t = $("rTicks"); t.textContent = "";
+  if (!R.book) return;
+  const marks = [];
+  if (R.book.kind === "text") {
+    const toc = (R.toc || []).filter(x => !x.sub);
+    const list = toc.length > 1 ? toc.map(x => x.di) : [];
+    const pg = bookPages();
+    for (const di of list) {
+      let f;
+      if (pg) { let b = 0; for (let i = 0; i < di; i++) b += docPages(i); f = b / pg.total; }
+      else if (R.tl && R.tlSum) { let b = 0; for (let i = 0; i < di; i++) b += R.tl[i]; f = b / R.tlSum; }
+      else f = di / R.book.docs.length;
+      if (f > 0.002 && f < 0.998) marks.push(f);
+    }
+  }
+  const rtl = t.classList.contains("rtl");
+  for (const f of marks.slice(0, 300)) { const i = el("i"); i.style[rtl ? "right" : "left"] = (f * 100).toFixed(2) + "%"; t.append(i); }
+}
+function sectionLabel() {
+  if (!R.toc || !R.toc.length) return R.book?.docs?.length > 1 ? `${R.di + 1} / ${R.book.docs.length}章 · ${R.pi + 1}/${R.pn}ページ` : `${R.pi + 1}/${R.pn}ページ`;
+  let cur = null; for (const t of R.toc) if (t.di <= R.di) cur = t; else break;
+  return `${cur ? cur.title + " · " : ""}${R.pi + 1}/${R.pn}ページ`;
+}
+async function loadTextLens(book, key) {
+  try {
+    const m = await DB.get("meta", key).catch(() => null);
+    if (m?.tl && m.tl.length === book.docs.length) return m.tl;
+    const tl = new Array(book.docs.length).fill(0); let i = 0;
+    const worker = async () => { while (i < book.docs.length) { const k = i++; try { tl[k] = visibleText(await book.zip.text(book.docs[k].href)).length; } catch (_) { tl[k] = 0; } } };
+    await Promise.all(Array.from({ length: 4 }, worker));
+    const m2 = await DB.get("meta", key).catch(() => null);
+    if (m2) DB.put("meta", { ...m2, tl }).catch(() => {});
+    return tl;
+  } catch (_) { return null; }
+}
+function renderToc() {
+  const box = $("rTocList"); box.textContent = "";
+  const toc = R.toc || [];
+  if (!toc.length) { box.append(el("div", "empty", "この本には目次がありません")); return; }
+  let cur = -1; toc.forEach((t, i) => { if (t.di <= R.di) cur = i; });
+  toc.forEach((t, i) => {
+    const b = el("button", (t.sub ? "sub" : "") + (i === cur ? " cur" : ""), t.title); b.type = "button";
+    b.addEventListener("click", () => { closeToc(); setUi(false); textLoad(t.di, {}); });
+    box.append(b);
+  });
+  box.querySelector(".cur")?.scrollIntoView({ block: "center" });
+}
+function openToc() { closePanel(); renderToc(); $("rToc").classList.remove("hidden"); $("rTocBtn").classList.add("on"); }
+function closeToc() { $("rToc").classList.add("hidden"); $("rTocBtn").classList.remove("on"); }
 async function textGo(delta) {
   if (R.loading) return;
   const np = R.pi + delta;
@@ -2049,7 +2322,8 @@ async function textGo(delta) {
   else { if (R.di <= 0) { toast("最初のページです"); return; } await textLoad(R.di - 1, { end: true }); }
 }
 async function textJumpFrac(pos) {
-  const n = R.book.docs.length; const x = Math.max(0, Math.min(0.9999, pos)) * n;
+  const n = R.book.docs.length; let x = Math.max(0, Math.min(0.9999, pos)) * n;
+  if (R.tl && R.tlSum > 0) { let want = Math.max(0, Math.min(0.9999, pos)) * R.tlSum, i = 0; while (i < n - 1 && want >= R.tl[i]) { want -= R.tl[i]; i++; } x = i + (R.tl[i] ? Math.min(0.999, want / R.tl[i]) : 0); }
   const d = Math.floor(x);
   if (d === R.di) { textShow(Math.round((x - d) * R.pn)); return; }
   await textLoad(d, { frac: x - d });
@@ -2101,19 +2375,21 @@ function closeReader() {
   if (gistProgressDirty) gistSyncProgress().catch(() => {});
   if (apkWebPending) setTimeout(() => location.reload(), 600);
 }
-function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rBottom").classList.toggle("hidden", !on); if (!on) closePanel(); }
+function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rBottom").classList.toggle("hidden", !on); if (!on) { closePanel(); closeToc(); } else if (R.book?.kind === "text") renderTicks(); }
 function mangaBg() { return prefs.mbg === "black" ? "#000" : prefs.mbg === "white" ? "#fff" : ""; }
 
 // ---- v0.24: 表示の設定パネル ----
 function closePanel() { $("rPanel").classList.add("hidden"); $("rAa").setAttribute("aria-expanded", "false"); $("rAa").classList.remove("on"); }
 let fontSampleLoaded = false;
 function openPanel() {
+  closeToc();
   if (!fontSampleLoaded) {
     fontSampleLoaded = true;
     const fams = Object.values(FONTS).map(f => f.gf).filter(Boolean);
     const ln = document.createElement("link"); ln.rel = "stylesheet"; ln.href = gfUrl(fams, "あ永字の明朝ゴシックUD丸手書き風しっぽり本まで"); document.head.append(ln);
   }
   renderPanel(); $("rPanel").classList.remove("hidden"); $("rAa").setAttribute("aria-expanded", "true"); $("rAa").classList.add("on");
+  if (R.book?.kind === "text") loadFolderFonts().then(() => { if (!$("rPanel").classList.contains("hidden")) renderPanel(); }).catch(() => {});
 }
 function renderPanel() {
   const bg = $("rpBg"); bg.textContent = "";
@@ -2125,12 +2401,32 @@ function renderPanel() {
     b.append(dot, el("small", "", t.name));
     bg.append(b);
   }
-  const fl = $("rpFont"); fl.textContent = "";
-  for (const [k, f] of Object.entries(FONTS)) {
-    const b = el("button", "fontBtn" + (prefs.tfont === k ? " on" : "")); b.type = "button"; b.dataset.v = k;
-    const sample = el("span", "fs", k === "book" ? "本" : "あ永"); if (f.stack) sample.style.fontFamily = f.stack;
-    b.append(sample, el("small", "", f.name)); fl.append(b);
+  const bars = $("rpBar"); bars.textContent = "";
+  for (const [k, t] of Object.entries(RBAR)) {
+    const b = el("button", "sw" + (prefs.rbar === k ? " on" : "")); b.type = "button"; b.title = t.name; b.dataset.v = k;
+    const dot = el("span"); dot.style.background = t.c || "linear-gradient(135deg, rgba(255,255,255,.85), rgba(200,205,215,.6))";
+    b.append(dot, el("small", "", t.name)); bars.append(b);
   }
+  const fl = $("rpFont"); fl.textContent = "";
+  const fontBtn = (k, label, stack, sampleText, extra) => {
+    const b = el("button", "fontBtn" + (prefs.tfont === k ? " on" : "")); b.type = "button"; b.dataset.v = k;
+    const sample = el("span", "fs", sampleText); if (stack) sample.style.fontFamily = stack;
+    b.append(sample, el("small", "", label)); if (extra != null) b.append(el("span", "dl", extra)); fl.append(b); return b;
+  };
+  // フォルダのフォント（PCの READER/fonts）を先に
+  for (const ff of folderFonts) {
+    const k = "x:" + ff.family;
+    const b = fontBtn(k, ff.label || ff.family, `"${fontCssName(ff.family)}",${SERIF}`, "あ永", "");
+    const f0 = [...(ff.files || [])].sort((a, c) => Math.abs((a.weight || 400) - 400) - Math.abs((c.weight || 400) - 400))[0];
+    const mb = (ff.files || []).reduce((t, f) => t + (f.size || 0), 0) / 1e6;
+    if (f0) fontIsCached(f0).then(ok => { if (ok) folderFontCss(ff, 400).catch(() => {}); else { const d = b.querySelector(".dl"); if (d) d.textContent = `${mb >= 1 ? Math.round(mb) + "MB・" : ""}初回は取り寄せ`; } }).catch(() => {});
+  }
+  // 選んでいるフォルダのフォントが一覧に無いとき（PCにつながらない等）
+  if (String(prefs.tfont).startsWith("x:") && !folderFontOf(prefs.tfont)) fontBtn(prefs.tfont, prefs.tfont.slice(2), SERIF, "あ永", "（PCのフォルダ）");
+  for (const [k, f] of Object.entries(FONTS)) fontBtn(k, f.name, f.stack, k === "book" ? "本" : "あ永");
+  $("rpFontNote").textContent = folderFonts.length
+    ? "PCの READER\\fonts に置いたフォントも出ます（初めて使うときに端末へ取り寄せ・以後はオフラインでも使えます）。"
+    : "PCの D:\\series_image_downloader\\READER\\fonts にフォント（.ttf / .otf / .woff2）を置くと、ここに出ます。";
   $("rpSize").value = String(prefs.font); $("rpSizeV").textContent = `${prefs.font}px`;
   $("rpLh").value = String(prefs.tlh); $("rpLhV").textContent = Number(prefs.tlh).toFixed(2);
   $("rpPad").value = String(prefs.tpad); $("rpPadV").textContent = `${Math.round(prefs.tpad * 100)}%`;
@@ -2153,6 +2449,12 @@ $("rAa").addEventListener("click", () => $("rPanel").classList.contains("hidden"
 $("rpBg").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref("tbg", b.dataset.v); applyPanel("text"); });
 $("rpFont").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref("tfont", b.dataset.v); applyPanel("text"); });
 $("rpSize").addEventListener("input", () => { setPref("font", Number($("rpSize").value)); applyPanel("text", 260); });
+const sizeStep = d => { setPref("font", Math.max(12, Math.min(40, prefs.font + d))); applyPanel("text", 200); };
+$("rpSizeDn").addEventListener("click", () => sizeStep(-1)); $("rpSizeUp").addEventListener("click", () => sizeStep(1));
+$("rpBar").addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref("rbar", b.dataset.v); applyBarColor(); renderPanel(); });
+$("rpFull").addEventListener("click", () => $("rFull").click());
+$("rTocBtn").addEventListener("click", () => $("rToc").classList.contains("hidden") ? openToc() : closeToc());
+$("rTocClose").addEventListener("click", closeToc);
 $("rpLh").addEventListener("input", () => { setPref("tlh", Number($("rpLh").value)); applyPanel("text", 260); });
 $("rpPad").addEventListener("input", () => { setPref("tpad", Number($("rpPad").value)); applyPanel("text", 260); });
 $("rpJustify").addEventListener("change", () => { setPref("tjust", $("rpJustify").checked); applyPanel("text"); });
@@ -2169,6 +2471,7 @@ panelSeg("rpFlow", "flow", "manga"); panelSeg("rpWm", "wm", "text"); panelSeg("r
   tl.addEventListener("pointerup", e => {
     if (!down || !R.book) return; down = false;
     if (!$("rPanel").classList.contains("hidden")) { closePanel(); return; }
+    if (!$("rToc").classList.contains("hidden")) { closeToc(); return; }
     const dx = e.clientX - sx, dy = e.clientY - sy;
     if (moved && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
       // 指を右へ動かす（左から右へめくる）と次へ ＝ 左タップで次へ と同じ向き
@@ -2187,7 +2490,7 @@ panelSeg("rpFlow", "flow", "manga"); panelSeg("rpWm", "wm", "text"); panelSeg("r
   });
   addEventListener("keydown", e => {
     if (!R.book || $("reader").classList.contains("hidden")) return;
-    const leftNext = R.book.kind === "text" ? (R.vertical || R.book.rtl) : prefs.dir === "rtl";
+    const leftNext = R.book.kind === "text" ? R.vertical : prefs.dir === "rtl";
     if (e.key === "ArrowLeft") (leftNext ? next : prev)();
     else if (e.key === "ArrowRight") (leftNext ? prev : next)();
     else if (e.key === " " || e.key === "PageDown" || e.key === "ArrowDown") next();
@@ -2201,7 +2504,13 @@ panelSeg("rpFlow", "flow", "manga"); panelSeg("rpWm", "wm", "text"); panelSeg("r
   $("rBack").addEventListener("click", closeReader);
   $("rSlider").addEventListener("input", () => {
     if (!R.book) return;
-    if (R.book.kind === "text") { clearTimeout(bindReader.st); bindReader.st = setTimeout(() => textJumpFrac(Number($("rSlider").value) / 1000), 120); return; }
+    if (R.book.kind === "text") {
+      clearTimeout(bindReader.st);
+      const v = Number($("rSlider").value), pg = bookPages();
+      if (pg && $("rSlider").min === "1") { $("rPage").textContent = `${v} / ${pg.total}`; bindReader.st = setTimeout(() => textJumpPage(v), 160); }
+      else bindReader.st = setTimeout(() => textJumpFrac(v / 1000), 120);
+      return;
+    }
     if (prefs.flow === "scroll") { scrollToPage(Number($("rSlider").value) - 1); return; }
     R.vi = Number($("rSlider").value) - 1; show();
   });
@@ -2513,7 +2822,7 @@ function renderSettings() {
   $("prefShowAdult").checked = !!prefs.showAdult;
   renderConn(); renderHomeApp(); renderSegs(); loadSiteModes().then(renderSiteModes).catch(() => renderSiteModes());
   $("tokenInput").value = "";
-  $("appVersion").textContent = `ℜ Reader v${APP_VERSION}${serverInfo ? ` ／ PC helper v${serverInfo.version}` : ""}`;
+  $("appVersion").textContent = `SID v${APP_VERSION}${serverInfo ? ` ／ PC helper v${serverInfo.version}` : ""}`;
   renderStorageInfo();
   if (gistOn() && !ghState.at) gistSyncProgress().then(() => currentView === "settings" && renderConn()).catch(() => currentView === "settings" && renderConn());
 }
@@ -2549,7 +2858,7 @@ function renderHomeApp() {
   $("pasteConnect").classList.toggle("hidden", !showPaste);
   box.classList.toggle("hidden", !showCopy && !showPaste);
   $("homeAppNote").textContent = showPaste
-    ? "ホーム画面のアプリはSafariと保存場所が別なので、最初に一度だけつなぎます。Safariでℜ Readerを開き、設定の「ホーム画面アプリ用のURLをコピー」を押してから、ここに戻って「コピーしたURLでつなぐ」を押してください。（Safariで本棚を開き直してからホーム画面に追加し直しても、自動でつながります）"
+    ? "ホーム画面のアプリはSafariと保存場所が別なので、最初に一度だけつなぎます。SafariでSIDを開き、設定の「ホーム画面アプリ用のURLをコピー」を押してから、ここに戻って「コピーしたURLでつなぐ」を押してください。（Safariで本棚を開き直してからホーム画面に追加し直しても、自動でつながります）"
     : showCopy ? "「ホーム画面に追加」すると、合言葉もいっしょにアプリへ入ります。前に追加したアプリがつながらないときは、アプリを削除して追加し直すか、このボタンでコピーしてアプリの設定で貼ってください（このURLには合言葉が入っています。人に送らないでください）。" : "";
 }
 $("copyPairUrl").addEventListener("click", async () => {
