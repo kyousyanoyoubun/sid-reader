@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.32.0";
+const APP_VERSION = "0.33.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -48,6 +48,7 @@ function applyPairing(text) {
   if (q.get("t")) { token = q.get("t"); LS.set("token", token); changed = true; }
   if (q.get("g") && q.get("gh")) { GH.gist = q.get("g"); GH.token = q.get("gh"); LS.set("gist", GH.gist); LS.set("gh", GH.token); changed = true; }
   if (q.has("pc")) { apiBase = q.get("pc").replace(/\/+$/, ""); LS.set("pc", apiBase); changed = true; }
+  if (/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(q.get("lan") || "")) { LS.set("pcLan", q.get("lan")); changed = true; }
   try { const u = new URL(raw); if (/^https?:$/.test(u.protocol) && u.origin !== location.origin && q.get("t") && !q.has("pc")) { apiBase = u.origin; LS.set("pc", apiBase); } } catch (_) {}
   return changed;
 }
@@ -62,6 +63,7 @@ function pairingHash() {
   const q = new URLSearchParams();
   if (token) q.set("t", token);
   if (apiBase) q.set("pc", apiBase);
+  if (LS.get("pcLan", "")) q.set("lan", LS.get("pcLan", ""));
   if (GH.gist && GH.token) { q.set("g", GH.gist); q.set("gh", GH.token); }
   return q.toString();
 }
@@ -87,7 +89,8 @@ async function prepareHomeScreenPairing() {
 prepareHomeScreenPairing();
 // v0.27: 端末ID（PCの見張りが「知らない端末」を見分けるため）。?t= で開くURL（画像・表紙・本体）にも付ける
 // v0.31.3: Tailscaleで直接つながる番号（PCの 8444番。Funnelにしていない）。つながればこちらを使う（Funnel=中継は遅い）
-let directBase = LS.get("pcDirect", ""), directOn = false, directState = "", directTriedAt = 0;
+// v0.33: いちばん速いのは「家の中で直接」（LAN・PCの17655番・本物の証明書）。次に Tailscale 直通（8444番）。どちらもダメならいつものURL（Funnel）
+let directBase = LS.get("pcDirect", ""), directOn = false, directState = "", directTriedAt = 0, directKind = LS.get("pcDirectKind", "");
 const baseNow = () => (directOn && directBase) ? directBase : (apiBase || "");
 const apiUrl = path => baseNow() + path + (/[?&]t=/.test(path) ? `&dv=${encodeURIComponent(deviceId)}` : "");
 const deviceName = (() => { const ua = navigator.userAgent; return /iPad|Macintosh.*Mobile|Macintosh.*Safari.*Version/.test(ua) && "ontouchend" in document ? "iPad" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows" : "端末"; })();
@@ -170,7 +173,7 @@ async function api(path, opts = {}) {
 let netState = { pc: "", pcText: "" };
 let failStreak = 0;
 let netOkAt = 0; // v0.31.1: 本の断片が最後に届いた時刻（取り寄せ中は /api/info が遅れても「つながっている」とみなす）
-/** 8444番（Tailscaleだけ）に届くか試す。届けば以後そちらを使う */
+/** 直接つながる候補: ①家の中（LAN） ②Tailscale直通（8444番） */
 function directCandidate() {
   try {
     const port = Number(serverInfo?.directPort) || Number(LS.get("pcDirectPort", 0)) || 0;
@@ -179,28 +182,47 @@ function directCandidate() {
     u.port = String(port); return u.origin;
   } catch (_) { return ""; }
 }
-async function probeDirect(quiet = false) {
-  const cand = directCandidate() || directBase;
-  if (!cand || !token) return false;
-  directTriedAt = Date.now();
-  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 4000);
+function directCandidates() {
+  const out = [];
+  const lan = serverInfo?.lanUrl || LS.get("pcLan", "");
+  if (lan) out.push({ url: lan.replace(/\/+$/, ""), kind: "lan", ms: 2500 });
+  const ts = directCandidate();
+  if (ts) out.push({ url: ts, kind: "ts", ms: 4000 });
+  return out;
+}
+let directTried = {};  // { lan: "ok"|"ng", ts: "ok"|"ng" }
+async function probeOne(c) {
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), c.ms);
   try {
-    const r = await fetch(cand + "/api/info", { headers: { "X-SID-Token": token, "X-SID-Device": deviceId, "X-SID-Device-Name": encodeURIComponent(deviceName) }, cache: "no-store", signal: ctl.signal });
+    const r = await fetch(c.url + "/api/info", { headers: { "X-SID-Token": token, "X-SID-Device": deviceId, "X-SID-Device-Name": encodeURIComponent(deviceName) }, cache: "no-store", signal: ctl.signal });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok && !/Funnel/.test(j.via || "")) {
-      const was = directOn;
-      directBase = cand; LS.set("pcDirect", cand); directOn = true; directState = "ok"; serverInfo = j;
-      if (!was && !quiet) toast("Tailscaleで直接つながりました（取り寄せが速くなります）");
-      return true;
-    }
-  } catch (_) {} finally { clearTimeout(tm); }
+    return r.ok && j.ok && !/Funnel/.test(j.via || "") ? j : null;
+  } catch (_) { return null; } finally { clearTimeout(tm); }
+}
+async function probeDirect(quiet = false) {
+  if (!token) return false;
+  const cands = directCandidates();
+  if (!cands.length) return false;
+  directTriedAt = Date.now();
+  // 候補を同時に試して、速い方（LAN優先）を使う
+  const res = await Promise.all(cands.map(probeOne));
+  for (let i = 0; i < cands.length; i++) directTried[cands[i].kind] = res[i] ? "ok" : "ng";
+  const i = res.findIndex(Boolean);
+  if (i >= 0) {
+    const was = directOn && directKind === cands[i].kind;
+    directBase = cands[i].url; directKind = cands[i].kind; LS.set("pcDirect", directBase); LS.set("pcDirectKind", directKind);
+    directOn = true; directState = "ok"; serverInfo = res[i];
+    if (serverInfo?.lanUrl) LS.set("pcLan", serverInfo.lanUrl);
+    if (!was && !quiet) toast(directKind === "lan" ? "家のWi-Fiで直接PCにつながりました（いちばん速い）" : "Tailscaleで直接つながりました（取り寄せが速くなります）");
+    return true;
+  }
   directOn = false; directState = "ng";
   return false;
 }
 async function checkServer() {
   const before = online;
   // v0.31.3: 前に直接つながったことがあれば、まずそちらを試す（外出先などで届かなければ、いつものURLへ）
-  if (token && directBase && !directOn && Date.now() - directTriedAt > 60000) await probeDirect(true);
+  if (token && !directOn && directCandidates().length && Date.now() - directTriedAt > 15000) await probeDirect(true);
   if (token && Date.now() - netOkAt < 30000) { online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; $("setDot").classList.add("hidden"); checkedOnce = true; return true; }
   if (!token) { online = false; netState = { pc: "none", pcText: "未設定" }; }
   else if (!apiBase && /github\.io$/.test(location.hostname)) { online = false; netState = { pc: "none", pcText: "PCのURLなし" }; }
@@ -219,7 +241,8 @@ async function checkServer() {
     if (ok) {
       online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; diagnoseOffline.at = 0; flushPending();
       if (serverInfo?.directPort) LS.set("pcDirectPort", serverInfo.directPort);
-      if (!directOn && /Funnel/.test(serverInfo?.via || "") && Date.now() - directTriedAt > 60000) probeDirect().then(okd => { if (okd && currentView === "settings") renderConn(); });
+      if (serverInfo?.lanUrl) LS.set("pcLan", serverInfo.lanUrl);
+      if (!directOn && /Funnel/.test(serverInfo?.via || "") && Date.now() - directTriedAt > 15000) probeDirect().then(okd => { if (okd && currentView === "settings") renderConn(); });
     }
     else { failStreak++; online = false; netState = { pc: "off", pcText: err?.auth ? "合言葉が違います" : "いまはつながっていません", hint: netState.hint || "" }; if (!err?.auth) diagnoseOffline().catch(() => {}); }
   }
@@ -242,7 +265,7 @@ async function diagnoseOffline() {
   const viaTs = /\.ts\.net/i.test(apiBase || "");
   netState.hint = !net ? "この端末がインターネットに出られていません（Wi-Fi・機内モード・VPNを確認）"
     : pcAlive === false ? "PCが2時間以上GitHubに合図を出していません（PCが止まっている／スリープ／helperのサービスが止まっている）"
-    : viaTs ? "この端末はインターネットに出られて、PCも動いています。切れているのは「この端末→PC」の道です。iPadなら Tailscaleアプリで「Use Tailscale DNS」をOFFにする（またはTailscaleをいったんOFF→ON）と、インターネット経由（Funnel）でつながります"
+    : viaTs ? "この端末はインターネットに出られて、PCも動いています。切れているのは「この端末→PC」の道です。家の中なら直通（Wi-Fi）を、外ならインターネット経由（Funnel）を自動で試し続けます。iPadのTailscaleは切ったままで構いません"
     : "この端末はインターネットに出られています。PCのURLを確認してください";
   if (currentView === "settings") renderConn();
 }
@@ -1194,7 +1217,8 @@ class ChunkJob {
           await this.fetchChunk(next++);
         }
       };
-      await Promise.all([worker(), worker()]);
+      // 家の中・Tailscale直通なら4本、Funnel（中継）なら2本ずつ
+      await Promise.all(Array.from({ length: directOn ? 4 : 2 }, worker));
       await Promise.all([...this.pending.values()]);
       if (this.have.size >= this.n) await this.finish();
       else throw new Error("途中で止まりました");
@@ -2360,15 +2384,18 @@ function renderConn() {
   if (online && serverInfo) row(true, "PCへの道", serverInfo.publicMode === "public" ? "インターネットから（このスマホにTailscaleは不要）" : "Tailscale（このスマホにもTailscaleが必要）");
   if (online && serverInfo?.via) {
     const viaFunnel = /Funnel/.test(serverInfo.via) && !directOn;
-    const why = directState === "ng"
+    const lanUrl = serverInfo?.lanUrl || LS.get("pcLan", "");
+    const lanWhy = !lanUrl ? "\n家の中で直接つなぐ設定がまだです（PCで「家の中で直接つなぐ設定.cmd」）"
+      : directTried.lan === "ng" ? `\n家の中の直通（${lanUrl.replace(/^https?:\/\//, "")}）に届きませんでした。外出中なら正常です。家にいるのに届かないときは、iPadとPCが同じWi-Fi/ルーターか、ルーターの「DNSリバインディング保護」を確認` : "";
+    const why = lanWhy + (directState === "ng"
       ? "\nTailscaleだけの番号（" + (directCandidate() || "8444番").replace(/^https?:\/\//, "") + "）に届きませんでした＝この端末の名前引き（DNS）がTailscaleを通っていません。"
         + "\n・Tailscaleアプリで接続中か、「Tailscale DNSを使う（Use Tailscale DNS）」がONか"
         + "\n・ほかのVPN・DNSのアプリや構成プロファイル（AdGuard・NextDNS・1.1.1.1 など）が入っていないか（あるとTailscaleのDNSが使われません）"
         + "\n・iCloudプライベートリレー／「IPアドレスのトラッキングを制限」がONならOFFにして試す"
         + "\n・PCで SETUP_TAILSCALE_SERVE.bat を一度実行（8444番を開く）"
-      : !serverInfo.directPort ? "\nPCがまだTailscaleだけの番号（8444番）を開いていません。PCで SETUP_TAILSCALE_SERVE.bat を一度実行してください" : "";
-    row(viaFunnel ? false : true, "いまの経路", directOn ? `Tailscale（直接・速い） ${directBase.replace(/^https?:\/\//, "")}` : viaFunnel ? `${serverInfo.via}＝中継を通るので遅い${why}` : `${serverInfo.via}（直接・速い）`);
-    if (viaFunnel) { const li = el("li"); const b = el("button", "secondary mini", "Tailscaleで直接つながるか試す"); b.type = "button"; b.addEventListener("click", async () => { b.disabled = true; b.textContent = "試しています…"; const okd = await probeDirect(); if (!okd) toast("届きませんでした（上の説明を確認してください）", 5000); renderConn(); }); li.append(b); ul.append(li); }
+      : !serverInfo.directPort ? "\nPCがまだTailscaleだけの番号（8444番）を開いていません。PCで SETUP_TAILSCALE_SERVE.bat を一度実行してください" : "");
+    row(viaFunnel ? false : true, "いまの経路", directOn ? `${directKind === "lan" ? "家のWi-Fiで直接（いちばん速い）" : "Tailscale（直接・速い）"} ${directBase.replace(/^https?:\/\//, "")}` : viaFunnel ? `${serverInfo.via}＝中継を通るので遅い${why}` : `${serverInfo.via}（直接・速い）`);
+    if (viaFunnel) { const li = el("li"); const b = el("button", "secondary mini", "直接つながるか試す（家のWi-Fi・Tailscale）"); b.type = "button"; b.addEventListener("click", async () => { b.disabled = true; b.textContent = "試しています…"; const okd = await probeDirect(); if (!okd) toast("届きませんでした（上の説明を確認してください）", 5000); renderConn(); }); li.append(b); ul.append(li); }
   }
   row(gistOn() ? (ghState.ok === false ? false : true) : null, "GitHub（PCを通さずに同期・依頼）", gistOn() ? (ghState.ok === false ? ghState.err : ghState.at ? `最終同期 ${new Date(ghState.at).toLocaleTimeString("ja-JP")}` : "設定済み") : "PCで「GitHubでつなぐ」を設定してからQRを読み直すと使えます");
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
