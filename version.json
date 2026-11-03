@@ -1,0 +1,11 @@
+{
+ "version": "0.34.0",
+ "files": [
+  "index.html",
+  "app.js",
+  "app.css",
+  "pair.html",
+  "manifest.webmanifest",
+  "icon.svg"
+ ]
+}
