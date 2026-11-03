@@ -582,3 +582,12 @@ html.ptrOn, html.ptrOn body { overscroll-behavior-y: contain; }
 .vol .act.cached { opacity: .8; outline: 1.5px dashed currentColor; outline-offset: -4px; }
 
 .dlOverlay .dlBox { position: fixed; top: calc(env(safe-area-inset-top) + 14px); left: 50%; transform: translateX(-50%); }
+
+/* v0.34: iPad（Safari・ホーム画面アプリ）は左上にウィンドウのボタン（閉じる等）が重なるので、上のバーを少し下げる */
+html.ipad { --safe-t: max(env(safe-area-inset-top, 0px), 32px); }
+/* v0.34: 漫画を縦につなげてスクロール */
+.scrollView { position: absolute; inset: 0; z-index: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; touch-action: pan-y pinch-zoom; overscroll-behavior: contain; }
+.scrollView .sp { display: block; width: 100%; max-width: 980px; margin: 0 auto; aspect-ratio: 1 / 1.42; position: relative; }
+.scrollView .sp img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.scrollView .sp:not(.ok)::after { content: attr(data-n); position: absolute; inset: 0; display: grid; place-items: center; color: var(--mute); font-size: 13px; }
+.reader.scrollMode .stage, .reader.scrollMode .tapLayer { display: none; }
