@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.33.0";
+const APP_VERSION = "0.33.1";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -252,6 +252,16 @@ async function checkServer() {
   return online;
 }
 
+// v0.33.1: 家の中の直通の住所を GitHub（Gist）から知る。PCに一度もつながれなくても、直接つなぎに行ける
+async function lanFromGist(files) {
+  if (!gistOn()) return false;
+  try {
+    const f = files || await gistFiles();
+    const u = String(jparse(f["sid-status.json"], {}).lanUrl || "");
+    if (/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(u) && u !== LS.get("pcLan", "")) { LS.set("pcLan", u); directTriedAt = 0; return true; }
+  } catch (_) {}
+  return false;
+}
 // v0.32: PCにつながらないとき「どこが切れているか」を見分ける（10分に1回まで）。
 // ① この端末がインターネットに出られるか（GitHubに届くか） ② PCが動いているか（PCがGitHubに2時間ごとに残す合図）
 async function diagnoseOffline() {
@@ -259,7 +269,7 @@ async function diagnoseOffline() {
   diagnoseOffline.at = Date.now();
   let net = false, pcAlive = null;
   try {
-    if (gistOn()) { const f = await gistFiles(); net = true; const st = jparse(f["sid-status.json"], {}); if (st.updatedAt) pcAlive = Date.now() / 1000 - Number(st.updatedAt) < 3 * 3600; }
+    if (gistOn()) { const f = await gistFiles(); net = true; const st = jparse(f["sid-status.json"], {}); if (st.updatedAt) pcAlive = Date.now() / 1000 - Number(st.updatedAt) < 3 * 3600; if (await lanFromGist(f)) { pcCheckNow(); } }
     else { const ctl = new AbortController(); setTimeout(() => ctl.abort(), 6000); await fetch("https://api.github.com/zen", { cache: "no-store", signal: ctl.signal }); net = true; }
   } catch (_) {}
   const viaTs = /\.ts\.net/i.test(apiBase || "");
@@ -2381,12 +2391,23 @@ function renderConn() {
   const row = (ok, title, note) => { const li = el("li"); const mk = el("span", "mk " + (ok === true ? "ok" : ok === false ? "ng" : ""), ok === true ? "✓" : ok === false ? "!" : ""); const t = el("div", "", title); if (note) t.append(el("small", "", note)); li.append(mk, t); ul.append(li); };
   const pcHost = baseNow() ? baseNow().replace(/^https?:\/\//, "") : location.host;
   row(online ? true : token ? false : null, "PC（本の一覧と保存）", online ? `つながっています（${pcHost}）${serverInfo?.readerRoot ? `\n本棚: ${serverInfo.readerRoot}` : ""}` : token ? `${netState.pcText}。${netState.hint || "PC・Firefox・helperの起動と、Tailscaleを確認"}` : "PCの「スマホ連携」のQRコードを読むとつながります");
+  // v0.33.1: PCにつながっていないときも、家の中の直通を試せるように
+  if (!online && token) {
+    const lanUrl = LS.get("pcLan", "");
+    row(lanUrl ? (directTried.lan === "ng" ? false : null) : null, "家の中の直通（Wi-Fi）", lanUrl ? `${lanUrl.replace(/^https?:\/\//, "")}${directTried.lan === "ng" ? "\n届きませんでした。Safariで下のテスト用ページを開いて、出た文字を確かめてください" : ""}` : "住所をまだ知りません（PCで設定済みなら、GitHubから自動で読みます）");
+    const li = el("li"); const b = el("button", "secondary mini", "いま直接つながるか試す"); b.type = "button";
+    b.addEventListener("click", async () => { b.disabled = true; b.textContent = "試しています…"; await lanFromGist().catch(() => {}); const okd = await probeDirect(); if (okd) await pcCheckNow(); else toast("届きませんでした", 4000); renderConn(); });
+    li.append(b);
+    if (lanUrl) { const a = el("a", "mini", "テスト用ページ（/healthz）を開く"); a.href = lanUrl + "/healthz"; a.target = "_blank"; a.rel = "noopener"; a.style.marginLeft = "10px"; li.append(a); }
+    ul.append(li);
+  }
   if (online && serverInfo) row(true, "PCへの道", serverInfo.publicMode === "public" ? "インターネットから（このスマホにTailscaleは不要）" : "Tailscale（このスマホにもTailscaleが必要）");
   if (online && serverInfo?.via) {
     const viaFunnel = /Funnel/.test(serverInfo.via) && !directOn;
     const lanUrl = serverInfo?.lanUrl || LS.get("pcLan", "");
-    const lanWhy = !lanUrl ? "\n家の中で直接つなぐ設定がまだです（PCで「家の中で直接つなぐ設定.cmd」）"
-      : directTried.lan === "ng" ? `\n家の中の直通（${lanUrl.replace(/^https?:\/\//, "")}）に届きませんでした。外出中なら正常です。家にいるのに届かないときは、iPadとPCが同じWi-Fi/ルーターか、ルーターの「DNSリバインディング保護」を確認` : "";
+    const lanWhy0 = !lanUrl ? "\n家の中で直接つなぐ設定がまだです（PCで「家の中で直接つなぐ設定.cmd」）"
+      : directTried.lan === "ng" ? `\n家の中の直通（${lanUrl.replace(/^https?:\/\//, "")}）に届きませんでした。外出中なら正常です。家にいるのに届かないときは、Safariで ${lanUrl}/healthz を開いて、出た文字を確かめてください` : "";
+    const lanWhy = lanWhy0;
     const why = lanWhy + (directState === "ng"
       ? "\nTailscaleだけの番号（" + (directCandidate() || "8444番").replace(/^https?:\/\//, "") + "）に届きませんでした＝この端末の名前引き（DNS）がTailscaleを通っていません。"
         + "\n・Tailscaleアプリで接続中か、「Tailscale DNSを使う（Use Tailscale DNS）」がONか"
@@ -2616,6 +2637,7 @@ window.__sidBack = () => {
   // v0.31: 読んでいる途中でアプリが閉じられた（iPadで裏に回したあと等）ら、端末にある本ならそのまま開き直す
   const reopen = LS.get("openBook", "");
   if (reopen) { const idx0 = await getSaved(); if (idx0[reopen]) openBook(reopen); else LS.set("openBook", ""); }
+  if (!LS.get("pcLan", "") && gistOn()) await Promise.race([lanFromGist(), sleep(4000)]);
   await checkServer();
   if (!token && !gistOn()) { showView("settings"); $("tokenMsg").textContent = isStandalone() && isIOS ? "ホーム画面のアプリは、Safariとは別に一度つなぐ必要があります（下の説明を見てください）。" : "PCの拡張機能の「スマホ連携」でQRコードを出して、このページを開き直してください。"; renderHomeApp(); }
   if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => { if (!document.hidden) gistSyncProgress().catch(() => {}); }, 10 * 60000); }
