@@ -1,6 +1,6 @@
 {
-  "name": "ℜ Reader",
-  "short_name": "ℜ",
+  "name": "SID",
+  "short_name": "SID",
   "description": "PC（D:\\epub）の漫画・小説を読む・保存する・PCへ依頼する",
   "start_url": "./",
   "scope": "./",
