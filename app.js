@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.33.1";
+const APP_VERSION = "0.34.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // v0.34: iPadは左上にウィンドウのボタンが重なるので、上のバーを少し下げる（app.css の html.ipad）
