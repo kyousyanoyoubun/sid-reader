@@ -8,6 +8,8 @@
 const APP_VERSION = "0.33.1";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// v0.34: iPadは左上にウィンドウのボタンが重なるので、上のバーを少し下げる（app.css の html.ipad）
+if (/iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) document.documentElement.classList.add("ipad");
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const svgUse = (id, cls) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); if (cls) s.setAttribute("class", cls); const u = document.createElementNS("http://www.w3.org/2000/svg", "use"); u.setAttribute("href", "#" + id); s.append(u); return s; };
 const fmtMB = b => b >= 1e9 ? (b / 1e9).toFixed(2) + "GB" : (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + "MB";
@@ -25,6 +27,7 @@ const prefs = {
   // v0.24: 小説の表示
   tbg: LS.get("tbg", "auto"), tfont: LS.get("tfont", "mincho"), tlh: LS.get("tlh", 1.85), tpad: LS.get("tpad", 1), tweight: LS.get("tweight", "400"),
   tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto"),
+  flow: LS.get("flow", "page"),   // v0.34: 漫画の読み方 page=めくる / scroll=縦につなげてスクロール
   showAdult: LS.get("showAdult", false)   // v0.29.3: 成人漫画は基本表示しない（設定で表示）
 };
 function setPref(k, v) { prefs[k] = v; LS.set(k, v); }
@@ -242,6 +245,7 @@ async function checkServer() {
       online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; diagnoseOffline.at = 0; flushPending();
       if (serverInfo?.directPort) LS.set("pcDirectPort", serverInfo.directPort);
       if (serverInfo?.lanUrl) LS.set("pcLan", serverInfo.lanUrl);
+      apkWebUpdate().catch(() => {});
       if (!directOn && /Funnel/.test(serverInfo?.via || "") && Date.now() - directTriedAt > 15000) probeDirect().then(okd => { if (okd && currentView === "settings") renderConn(); });
     }
     else { failStreak++; online = false; netState = { pc: "off", pcText: err?.auth ? "合言葉が違います" : "いまはつながっていません", hint: netState.hint || "" }; if (!err?.auth) diagnoseOffline().catch(() => {}); }
@@ -1751,7 +1755,8 @@ async function openWith(key, rec, getSrc, streaming = false, partial = null) {
     const textMode = book.kind === "text";
     $("stage").classList.toggle("textMode", textMode); $("textFrame").classList.toggle("hidden", !textMode);
     $("rWm").classList.toggle("hidden", !textMode);
-    ["rSpread", "rDir"].forEach(id => $(id).classList.toggle("hidden", textMode));
+    ["rSpread", "rDir", "rFlow"].forEach(id => $(id).classList.toggle("hidden", textMode));
+    if (textMode) { $("reader").classList.remove("scrollMode"); $("scrollView").classList.add("hidden"); scrollTeardown(); }
     $("rPanel").classList.toggle("text", textMode); closePanel();
     $("reader").style.background = textMode ? textColors().bg : mangaBg();
     if (textMode) {
@@ -1777,6 +1782,12 @@ function useSpread() {
   return innerWidth > innerHeight * 1.05;
 }
 function layout(page) {
+  const scroll = prefs.flow === "scroll";
+  $("reader").classList.toggle("scrollMode", scroll); $("scrollView").classList.toggle("hidden", !scroll);
+  $("rFlow").textContent = scroll ? "スクロール" : "めくる";
+  $("rSpread").classList.toggle("hidden", scroll);
+  if (scroll) { scrollLayout(page); return; }
+  scrollTeardown();
   const n = R.book.pages.length; const views = [];
   if (useSpread()) {
     let i = 0;
@@ -1816,9 +1827,73 @@ async function show() {
   near.forEach(i => R.book.url(i).then(u => { if (R.book?.remote) { const im = new Image(); im.decoding = "async"; im.src = u; } }).catch(() => {}));
   R.book.trim(R.page, 10);
 }
+// ---- v0.34: 漫画を縦につなげてスクロールで読む（Webtoonや縦読みが好きなとき） ----
+const SC = { io: null, cur: 0, raf: 0, seq: 0 };
+function scrollTeardown() {
+  if (SC.io) { SC.io.disconnect(); SC.io = null; }
+  const v = $("scrollView"); if (v) { v.onscroll = null; v.textContent = ""; }
+}
+function scrollLayout(page) {
+  scrollTeardown();
+  const v = $("scrollView"); const n = R.book.pages.length; const seq = ++SC.seq;
+  R.views = R.book.pages.map((_, i) => [i]);
+  $("rSlider").min = "1"; $("rSlider").max = String(n); $("rSlider").classList.add("ltr");
+  $("rDir").textContent = prefs.dir === "rtl" ? "右開き" : "左開き";
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < n; i++) { const d = el("div", "sp"); d.dataset.i = String(i); d.dataset.n = String(i + 1); d.append(el("img")); d.firstChild.alt = ""; d.firstChild.draggable = false; frag.append(d); }
+  v.append(frag);
+  const load = async d => {
+    if (d.dataset.st) return; d.dataset.st = "1";
+    const i = Number(d.dataset.i), im = d.firstChild;
+    try {
+      const u = await R.book.url(i); if (seq !== SC.seq || !d.dataset.st) return;
+      im.onload = () => {
+        if (seq !== SC.seq || !im.naturalWidth) return;
+        const before = d.getBoundingClientRect();
+        d.style.aspectRatio = `${im.naturalWidth} / ${im.naturalHeight}`; d.classList.add("ok");
+        const after = d.getBoundingClientRect();
+        if (before.bottom <= 0) v.scrollTop += after.height - before.height;   // 上のページの高さが変わっても、見ているところを動かさない
+      };
+      im.src = u;
+    } catch (_) { d.dataset.st = ""; }
+  };
+  SC.io = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) load(e.target); }, { root: v, rootMargin: "180% 0px" });
+  v.querySelectorAll(".sp").forEach(d => SC.io.observe(d));
+  const track = () => {
+    SC.raf = 0; if (seq !== SC.seq || !R.book) return;
+    const mid = v.scrollTop + v.clientHeight * 0.4; const kids = v.children;
+    let lo = 0, hi = kids.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (kids[m].offsetTop <= mid) lo = m; else hi = m - 1; }
+    if (lo === SC.cur && R.page === lo) return;
+    SC.cur = lo; R.vi = lo; R.page = lo;
+    $("rPage").textContent = `${lo + 1} / ${n}`; $("rSlider").value = String(lo + 1);
+    saveProgress({ page: lo, pages: n });
+    // 遠くのページの画像は手放す（長い本でも重くならないように）
+    for (let i = 0; i < kids.length; i++) { const d = kids[i]; if (d.dataset.st && Math.abs(i - lo) > 14) { d.dataset.st = ""; d.firstChild.removeAttribute("src"); } }
+    R.book.trim(lo, 14);
+    if (R.ui) setUi(false);
+  };
+  v.onscroll = () => { if (!SC.raf) SC.raf = requestAnimationFrame(track); };
+  let tx = 0, ty = 0, tt = 0;
+  v.onpointerdown = e => { tx = e.clientX; ty = e.clientY; tt = Date.now(); };
+  v.onpointerup = e => {
+    if (Math.abs(e.clientX - tx) > 10 || Math.abs(e.clientY - ty) > 10 || Date.now() - tt > 500) return;
+    if (!$("rPanel").classList.contains("hidden")) { closePanel(); return; }
+    const x = e.clientX / innerWidth, y = e.clientY / innerHeight;
+    if (x > 0.25 && x < 0.75 && y > 0.25 && y < 0.75) { setUi(!R.ui); return; }
+    v.scrollBy({ top: (y >= 0.5 ? 1 : -1) * v.clientHeight * 0.85, behavior: "smooth" });   // 上下の端をタップで1画面ずつ
+  };
+  SC.cur = -1; R.page = Math.max(0, Math.min(n - 1, page || 0));
+  requestAnimationFrame(() => { const d = v.children[R.page]; if (d) v.scrollTop = d.offsetTop; track(); });
+}
+function scrollToPage(i) {
+  const v = $("scrollView"); const d = v.children[Math.max(0, Math.min(v.children.length - 1, i))];
+  if (d) v.scrollTo({ top: d.offsetTop, behavior: "auto" });
+}
 function go(delta) {
   if (!R.book) return;
   if (R.book.kind === "text") { textGo(delta); return; }
+  if (prefs.flow === "scroll") { const i = R.page + delta; if (i < 0) { toast("最初のページです"); return; } if (i >= R.book.pages.length) { toast("最後のページです"); return; } scrollToPage(i); return; }
   const ni = R.vi + delta;
   if (ni < 0) { toast("最初のページです"); return; }
   if (ni >= R.views.length) { toast("最後のページです"); return; }
@@ -2019,10 +2094,12 @@ function closeReader() {
   if (R.book) { R.book.close(); R.book = null; }
   if (R.partial) { R.partial.onProgress = null; R.partial = null; }
   $("textFrame").srcdoc = ""; $("pgA").removeAttribute("src"); $("pgB").removeAttribute("src");
+  scrollTeardown(); $("reader").classList.remove("scrollMode"); $("scrollView").classList.add("hidden");
   if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   setUi(false);
   if (currentView === "library") renderLibrary(false); else if (currentView === "continue") renderContinue();
   if (gistProgressDirty) gistSyncProgress().catch(() => {});
+  if (apkWebPending) setTimeout(() => location.reload(), 600);
 }
 function setUi(on) { R.ui = on; $("rTop").classList.toggle("hidden", !on); $("rBottom").classList.toggle("hidden", !on); if (!on) closePanel(); }
 function mangaBg() { return prefs.mbg === "black" ? "#000" : prefs.mbg === "white" ? "#fff" : ""; }
@@ -2059,7 +2136,7 @@ function renderPanel() {
   $("rpPad").value = String(prefs.tpad); $("rpPadV").textContent = `${Math.round(prefs.tpad * 100)}%`;
   $("rpJustify").checked = !!prefs.tjust; $("rpOverride").checked = !!prefs.toverride;
   const segOn = (id, v) => $(id).querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
-  segOn("rpWm", prefs.wm); segOn("rpWeight", prefs.tweight); segOn("rpSpread", prefs.spread); segOn("rpDir", prefs.dir); segOn("rpMbg", prefs.mbg); segOn("rpTap", prefs.tap);
+  segOn("rpWm", prefs.wm); segOn("rpWeight", prefs.tweight); segOn("rpSpread", prefs.spread); segOn("rpDir", prefs.dir); segOn("rpMbg", prefs.mbg); segOn("rpTap", prefs.tap); segOn("rpFlow", prefs.flow);
 }
 let panelTimer = null;
 function applyPanel(kind = "text", delay = 0) {
@@ -2081,7 +2158,7 @@ $("rpPad").addEventListener("input", () => { setPref("tpad", Number($("rpPad").v
 $("rpJustify").addEventListener("change", () => { setPref("tjust", $("rpJustify").checked); applyPanel("text"); });
 $("rpOverride").addEventListener("change", () => { setPref("toverride", $("rpOverride").checked); applyPanel("text"); });
 const panelSeg = (id, key, kind) => $(id).addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref(key, b.dataset.v); applyPanel(kind); });
-panelSeg("rpWm", "wm", "text"); panelSeg("rpWeight", "tweight", "text"); panelSeg("rpSpread", "spread", "manga"); panelSeg("rpDir", "dir", "manga"); panelSeg("rpMbg", "mbg", "mangaBg"); panelSeg("rpTap", "tap", "none");
+panelSeg("rpFlow", "flow", "manga"); panelSeg("rpWm", "wm", "text"); panelSeg("rpWeight", "tweight", "text"); panelSeg("rpSpread", "spread", "manga"); panelSeg("rpDir", "dir", "manga"); panelSeg("rpMbg", "mbg", "mangaBg"); panelSeg("rpTap", "tap", "none");
 
 // 操作: タップ（既定: 左で次へ／中央でメニュー）、スワイプ、キー、ホイール
 (function bindReader() {
@@ -2099,6 +2176,8 @@ panelSeg("rpWm", "wm", "text"); panelSeg("rpWeight", "tweight", "text"); panelSe
       forward ? next() : prev(); if (R.ui) setUi(false); return;
     }
     if (moved && R.book?.kind === "text" && R.vertical && Math.abs(dy) > 40) { dy < 0 ? next() : prev(); return; }
+    // v0.34: 漫画は上下のスワイプでもめくる（上へ＝次へ）
+    if (moved && R.book?.kind !== "text" && Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx)) { dy < 0 ? next() : prev(); if (R.ui) setUi(false); return; }
     if (moved || Date.now() - st > 650) return;
     const x = e.clientX / innerWidth;
     if (x > 0.36 && x < 0.64) { setUi(!R.ui); return; }
@@ -2123,8 +2202,10 @@ panelSeg("rpWm", "wm", "text"); panelSeg("rpWeight", "tweight", "text"); panelSe
   $("rSlider").addEventListener("input", () => {
     if (!R.book) return;
     if (R.book.kind === "text") { clearTimeout(bindReader.st); bindReader.st = setTimeout(() => textJumpFrac(Number($("rSlider").value) / 1000), 120); return; }
+    if (prefs.flow === "scroll") { scrollToPage(Number($("rSlider").value) - 1); return; }
     R.vi = Number($("rSlider").value) - 1; show();
   });
+  $("rFlow").addEventListener("click", () => { if (!R.book || R.book.kind === "text") return; setPref("flow", prefs.flow === "scroll" ? "page" : "scroll"); layout(R.page); renderPanel(); toast(prefs.flow === "scroll" ? "縦につなげてスクロールで読みます" : "ページをめくって読みます（左右・上下のスワイプ・タップ）"); });
   $("rSpread").addEventListener("click", () => { setPref("spread", { auto: "on", on: "off", off: "auto" }[prefs.spread]); layout(R.page); });
   $("rDir").addEventListener("click", () => { setPref("dir", prefs.dir === "rtl" ? "ltr" : "rtl"); layout(R.page); });
   $("rWm").addEventListener("click", () => { setPref("wm", { auto: "vertical", vertical: "horizontal", horizontal: "auto" }[prefs.wm]); textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); });
@@ -2621,6 +2702,28 @@ window.__sidBack = () => {
   if (currentView !== "library") { showView("library"); return true; }
   return false;
 };
+// ---- v0.34: Androidアプリは、リーダーの画面（HTML/JS/CSS）をPCから取り寄せて自分で新しくする（APKを入れ直さなくてよい） ----
+const verNum = v => String(v || "0").split(".").map(x => parseInt(x, 10) || 0).reduce((a, x) => a * 1000 + x, 0);
+let apkWebChecked = 0, apkWebPending = false;
+async function apkWebUpdate() {
+  if (!window.SIDNative || typeof SIDNative.webPut !== "function" || Date.now() - apkWebChecked < 30 * 60000) return;
+  apkWebChecked = Date.now();
+  const base = baseNow(); if (!base) return;
+  const vr = await fetch(base + "/app/version.json", { cache: "no-store" }); if (!vr.ok) return;
+  const info = await vr.json();
+  if (!info?.version || verNum(info.version) <= verNum(APP_VERSION) || !Array.isArray(info.files)) return;
+  const b64 = blob => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
+  if (SIDNative.webBegin() !== "ok") return;
+  for (const f of info.files) {
+    if (!/^[A-Za-z0-9._-]+$/.test(f)) continue;
+    const r = await fetch(base + "/app/" + f, { cache: "no-store" }); if (!r.ok) throw new Error(f + ": HTTP " + r.status);
+    if (SIDNative.webPut(f, await b64(await r.blob())) !== "ok") throw new Error(f + " を保存できません");
+  }
+  if (SIDNative.webCommit(String(info.version)) !== "ok") return;
+  apkWebPending = true;
+  toast(`リーダーを v${info.version} に新しくしました${R.book ? "（本を閉じると切り替わります）" : ""}`, 4000);
+  if (!R.book) setTimeout(() => location.reload(), 1500);
+}
 (async function boot() {
   if (window.SIDNative) document.documentElement.classList.add("native");
   else if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "127.0.0.1" || location.hostname === "localhost")) {
@@ -2634,6 +2737,7 @@ window.__sidBack = () => {
   await reconcileSaved().catch(() => {});
   showView(LS.get("view", "library") === "settings" ? "library" : (LS.get("view", "library") || "library"));
   requestAnimationFrame(moveIndicator);
+  nativeCall("webOk");   // v0.34: 取り寄せた画面がちゃんと起動した合図（来なければアプリが同梱の画面に戻す）
   // v0.31: 読んでいる途中でアプリが閉じられた（iPadで裏に回したあと等）ら、端末にある本ならそのまま開き直す
   const reopen = LS.get("openBook", "");
   if (reopen) { const idx0 = await getSaved(); if (idx0[reopen]) openBook(reopen); else LS.set("openBook", ""); }
