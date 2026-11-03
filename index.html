@@ -272,6 +272,7 @@
       <img id="pgA" alt="" draggable="false">
       <img id="pgB" alt="" draggable="false">
     </div>
+    <div id="scrollView" class="scrollView hidden" aria-label="ページ（上下にスクロール）"></div>
     <iframe id="textFrame" class="textFrame hidden" title="本文" sandbox="allow-same-origin"></iframe>
     <div id="tapLayer" class="tapLayer"></div>
     <div id="rLoading" class="rLoading hidden"><span class="spin"></span></div>
@@ -285,6 +286,7 @@
       <div class="rTools">
         <button id="rSpread" class="rTool" type="button">見開き</button>
         <button id="rDir" class="rTool" type="button">右開き</button>
+        <button id="rFlow" class="rTool" type="button">めくる</button>
         <button id="rWm" class="rTool hidden" type="button">縦書き</button>
         <button id="rAa" class="rTool strong" type="button" aria-expanded="false"><svg><use href="#i-aa"/></svg><span>表示</span></button>
         <button id="rFull" class="rTool" type="button">全画面</button>
@@ -320,6 +322,10 @@
         <div class="rpRow"><span class="rpLbl">文字の太さ</span><div class="seg" id="rpWeight"><button data-v="300" type="button">細</button><button data-v="400" type="button">標準</button><button data-v="600" type="button">太</button></div></div>
         <label class="rpRow"><span class="rpLbl">両端そろえ</span><input id="rpJustify" type="checkbox" class="toggle"></label>
         <label class="rpRow"><span class="rpLbl">本のフォント・色を使わない</span><input id="rpOverride" type="checkbox" class="toggle"></label>
+      </div>
+      <div class="rpSec mangaOnly">
+        <div class="rpLbl">読み方</div>
+        <div class="seg wide" id="rpFlow"><button data-v="page" type="button">ページをめくる（左右・上下のスワイプ）</button><button data-v="scroll" type="button">縦につなげてスクロール</button></div>
       </div>
       <div class="rpSec mangaOnly">
         <div class="rpLbl">見開き</div>
