@@ -8,15 +8,15 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="ℜ">
-  <title>ℜ Reader</title>
+  <meta name="apple-mobile-web-app-title" content="SID">
+  <title>SID</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
-  <link rel="stylesheet" href="app.css?v=0.34.0">
+  <link rel="stylesheet" href="app.css?v=0.35.0">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -41,6 +41,10 @@
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="2" fill="none"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 14 6-6 6 6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-toc" viewBox="0 0 24 24"><path d="M8 6.5h12M8 12h12M8 17.5h12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="4" cy="6.5" r="1.3" fill="currentColor"/><circle cx="4" cy="12" r="1.3" fill="currentColor"/><circle cx="4" cy="17.5" r="1.3" fill="currentColor"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5.2" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="18.8" r="2" fill="currentColor"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z" stroke="currentColor" stroke-width="1.9" fill="none"/><path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.6 7.6 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4z" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/></symbol>
+      <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-aa" viewBox="0 0 24 24"><path d="M3 18.5 8 5.5h1.6l5 13M4.9 14h7.8" stroke="currentColor" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 11.2c-2.2 0-3.4 1.2-3.4 2.9 0 1.6 1.1 2.6 2.7 2.6 1.1 0 1.9-.5 2.5-1.3v1.1M21 11.4v7" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/></symbol>
       <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.3V4.8c0-.7.6-1.3 1.3-1.3h7.5l8.2 8.2a1.3 1.3 0 0 1 0 1.8l-7.3 7.3a1.3 1.3 0 0 1-1.8 0z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/><circle cx="8.2" cy="8.2" r="1.6" fill="currentColor"/></symbol>
       <symbol id="i-dn" viewBox="0 0 24 24"><path d="m6 10 6 6 6-6" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -276,35 +280,57 @@
     <iframe id="textFrame" class="textFrame hidden" title="本文" sandbox="allow-same-origin"></iframe>
     <div id="tapLayer" class="tapLayer"></div>
     <div id="rLoading" class="rLoading hidden"><span class="spin"></span></div>
-    <div id="rTop" class="rbar rTop glass hidden">
-      <button id="rBack" class="iconBtn" type="button" aria-label="本棚へ"><svg><use href="#i-back"/></svg></button>
-      <div class="rTitle" id="rTitle"></div>
-      <div class="rPage" id="rPage"></div>
+    <!-- v0.35: ReadEraのような上下のバー（色は ⋮ → メニューの色 で選べる） -->
+    <div id="rTop" class="rbar rTop hidden">
+      <button id="rBack" class="rIcon" type="button" aria-label="本棚へ"><svg><use href="#i-back"/></svg></button>
+      <div class="rHead">
+        <div class="rTitle" id="rTitle"></div>
+        <div class="rAuthor" id="rAuthor"></div>
+        <div class="rSection" id="rSection"></div>
+      </div>
+      <button id="rTocBtn" class="rIcon" type="button" aria-label="目次"><svg><use href="#i-toc"/></svg></button>
+      <button id="rAa" class="rIcon" type="button" aria-label="表示の設定" aria-expanded="false"><svg><use href="#i-more"/></svg></button>
     </div>
-    <div id="rBottom" class="rbar rBottom glass hidden">
-      <input id="rSlider" type="range" min="1" max="1" value="1" aria-label="ページ">
-      <div class="rTools">
+    <div id="rBottom" class="rbar rBottom hidden">
+      <div class="rTools mangaTools">
         <button id="rSpread" class="rTool" type="button">見開き</button>
         <button id="rDir" class="rTool" type="button">右開き</button>
         <button id="rFlow" class="rTool" type="button">めくる</button>
         <button id="rWm" class="rTool hidden" type="button">縦書き</button>
-        <button id="rAa" class="rTool strong" type="button" aria-expanded="false"><svg><use href="#i-aa"/></svg><span>表示</span></button>
-        <button id="rFull" class="rTool" type="button">全画面</button>
+        <button id="rFull" class="rTool" type="button" aria-label="全画面"><svg><use href="#i-full"/></svg></button>
       </div>
+      <div class="rPage" id="rPage"></div>
+      <div class="rSlideWrap"><div class="rTicks" id="rTicks"></div><input id="rSlider" type="range" min="1" max="1" value="1" aria-label="ページ"></div>
     </div>
-    <!-- v0.24: 表示の設定（小説: 背景・フォント・文字の大きさ・行間・余白・書き方向 ／ 漫画: 見開き・向き・背景） -->
-    <div id="rPanel" class="rPanel glass hidden" role="dialog" aria-label="表示の設定">
+    <!-- v0.35: 目次 -->
+    <div id="rToc" class="rToc hidden" role="dialog" aria-label="目次">
+      <div class="rTocHead"><b>目次</b><button id="rTocClose" class="rIcon" type="button" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
+      <div id="rTocList" class="rTocList"></div>
+    </div>
+    <!-- 表示の設定（⋮）: 小説 = 書き方向・フォント・文字の大きさ・背景・メニューの色… ／ 漫画 = 読み方・見開き・向き・背景 -->
+    <div id="rPanel" class="rPanel hidden" role="dialog" aria-label="表示の設定">
+      <div class="rpTitle textOnly">小説の表示</div>
+      <div class="rpTitle mangaOnly">漫画の表示</div>
       <div class="rpSec textOnly">
-        <div class="rpLbl">背景</div>
-        <div class="swatches" id="rpBg"></div>
+        <div class="rpLbl">書き方向</div>
+        <div class="seg wide" id="rpWm"><button data-v="vertical" type="button">縦書き</button><button data-v="horizontal" type="button">横書き</button><button data-v="auto" type="button">本のまま</button></div>
+      </div>
+      <div class="rpSec textOnly">
+        <div class="rpRow"><span class="rpLbl">文字の大きさ</span><b id="rpSizeV"></b></div>
+        <div class="rpSlide"><button id="rpSizeDn" class="rpStep" type="button" aria-label="小さく">A−</button><input id="rpSize" type="range" min="12" max="40" step="1"><button id="rpSizeUp" class="rpStep big" type="button" aria-label="大きく">A＋</button></div>
       </div>
       <div class="rpSec textOnly">
         <div class="rpLbl">フォント</div>
         <div class="fontList" id="rpFont"></div>
+        <div class="rpNote" id="rpFontNote"></div>
       </div>
       <div class="rpSec textOnly">
-        <div class="rpRow"><span class="rpLbl">文字の大きさ</span><b id="rpSizeV"></b></div>
-        <div class="rpSlide"><span class="aS">A</span><input id="rpSize" type="range" min="12" max="36" step="1"><span class="aL">A</span></div>
+        <div class="rpLbl">背景の色</div>
+        <div class="swatches" id="rpBg"></div>
+      </div>
+      <div class="rpSec">
+        <div class="rpLbl">メニューの色</div>
+        <div class="swatches bars" id="rpBar"></div>
       </div>
       <div class="rpSec textOnly">
         <div class="rpRow"><span class="rpLbl">行間</span><b id="rpLhV"></b></div>
@@ -313,10 +339,6 @@
       <div class="rpSec textOnly">
         <div class="rpRow"><span class="rpLbl">余白</span><b id="rpPadV"></b></div>
         <input id="rpPad" type="range" min="0.3" max="2.4" step="0.1">
-      </div>
-      <div class="rpSec textOnly">
-        <div class="rpLbl">書き方向</div>
-        <div class="seg wide" id="rpWm"><button data-v="auto" type="button">本のまま</button><button data-v="vertical" type="button">縦書き</button><button data-v="horizontal" type="button">横書き</button></div>
       </div>
       <div class="rpSec textOnly">
         <div class="rpRow"><span class="rpLbl">文字の太さ</span><div class="seg" id="rpWeight"><button data-v="300" type="button">細</button><button data-v="400" type="button">標準</button><button data-v="600" type="button">太</button></div></div>
@@ -343,6 +365,9 @@
         <div class="rpLbl">タップで次へ</div>
         <div class="seg wide" id="rpTap"><button data-v="left" type="button">左をタップ</button><button data-v="right" type="button">右をタップ</button></div>
       </div>
+      <div class="rpSec">
+        <button id="rpFull" class="rpWide" type="button"><svg><use href="#i-full"/></svg>全画面</button>
+      </div>
     </div>
   </div>
 
@@ -355,6 +380,6 @@
     </div>
   </div>
   <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=0.34.0"></script>
+  <script src="app.js?v=0.35.0"></script>
 </body>
 </html>
