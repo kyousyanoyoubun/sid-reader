@@ -374,7 +374,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 .stage img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; }
 .stage.spread img { max-width: 50%; }
 .stage.textMode { display: none; }
-.textFrame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--paper); }
+.textFrame { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 0; background: var(--paper); display: block; } /* v0.35: 幅・高さはJSで整数pxに固定（ずれ防止） */
 .tapLayer { position: absolute; inset: 0; z-index: 2; }
 .rLoading { position: fixed; left: 0; right: 0; top: calc(var(--safe-t, env(safe-area-inset-top)) + 14px); z-index: 70; display: flex; justify-content: center; pointer-events: none; }
 .rLoading .spin { background: var(--glass, rgba(127,127,127,.25)); box-shadow: 0 2px 10px rgba(0,0,0,.25); }
@@ -591,3 +591,76 @@ html.ipad { --safe-t: max(env(safe-area-inset-top, 0px), 32px); }
 .scrollView .sp img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .scrollView .sp:not(.ok)::after { content: attr(data-n); position: absolute; inset: 0; display: grid; place-items: center; color: var(--mute); font-size: 13px; }
 .reader.scrollMode .stage, .reader.scrollMode .tapLayer { display: none; }
+
+/* ---------- v0.35: 読書画面のバー（ReadEra風。色は --rb で選べる） ---------- */
+.reader { --rb: #005c75; --rb2: #0a4a5e; --rbInk: #fff; --rbMute: rgba(255,255,255,.74); --rpBg: #3d3f42; --rpInk: #f1f2f4; --rpMute: rgba(241,242,244,.62); --rpLine: rgba(255,255,255,.1); --rpAcc: #39b5d6; }
+.rbar { left: 0; right: 0; border-radius: 0; animation: barIn .22s var(--ease); background: var(--rb); color: var(--rbInk); box-shadow: 0 2px 10px rgba(0,0,0,.22); }
+.reader:not(.glassBars) .rbar { -webkit-backdrop-filter: none; backdrop-filter: none; border: 0; }
+.rTop { top: 0; padding: calc(6px + var(--safe-t)) 6px 8px; display: grid; grid-template-columns: auto 1fr auto auto; gap: 2px; align-items: center; }
+.rHead { min-width: 0; padding: 0 6px; display: flex; flex-direction: column; gap: 1px; }
+.rTitle { font-size: 16px; font-weight: 700; line-height: 1.3; }
+.rAuthor, .rSection { font-size: 12.5px; color: var(--rbMute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; }
+.rAuthor:empty, .rSection:empty { display: none; }
+.rIcon { width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: inherit; display: grid; place-items: center; cursor: pointer; flex: none; }
+.rIcon svg { width: 24px; height: 24px; }
+.rIcon:active, .rIcon.on { background: rgba(255,255,255,.16); }
+.rBottom { bottom: 0; padding: 8px 14px calc(10px + var(--safe-b)); gap: 4px; }
+.rPage { text-align: center; font-size: 15px; font-weight: 600; color: var(--rbInk); padding: 2px 0 0; font-variant-numeric: tabular-nums; }
+.rSlideWrap { position: relative; height: 30px; }
+.rSlideWrap input[type=range] { position: absolute; inset: 0; width: 100%; height: 30px; margin: 0; background: transparent; accent-color: #4fc3e6; }
+.rTicks { position: absolute; left: 8px; right: 8px; top: 50%; height: 12px; transform: translateY(-50%); pointer-events: none; }
+.rTicks i { position: absolute; top: 0; width: 1px; height: 12px; background: rgba(255,255,255,.42); }
+
+.rTools { gap: 2px; }
+.rTool { color: var(--rbInk); height: 32px; padding: 0 12px; font-size: 12.5px; }
+.rTool:active, .rTool.strong { background: rgba(255,255,255,.14); }
+.rTool svg { width: 18px; height: 18px; }
+.reader.isText .mangaTools { display: none; }
+/* ガラス（以前の見た目）を選んだとき */
+.reader.glassBars .rbar { background: var(--glass-hi); color: var(--ink); -webkit-backdrop-filter: blur(22px) saturate(1.6); backdrop-filter: blur(22px) saturate(1.6); }
+.reader.glassBars { --rbInk: var(--ink); --rbMute: var(--mute); }
+.reader.glassBars .rTicks i { background: var(--line2); }
+.reader.glassBars .rSlideWrap input[type=range] { accent-color: var(--ink); }
+
+/* ⋮ の設定（右上に出す・ReadEraの濃いカード風） */
+.rPanel { top: calc(64px + var(--safe-t)); bottom: auto; right: 8px; width: min(380px, calc(100vw - 16px)); max-height: calc(100% - 92px - var(--safe-t) - var(--safe-b));
+  border-radius: 6px; padding: 4px 14px 8px; background: var(--rpBg); color: var(--rpInk); box-shadow: 0 10px 30px rgba(0,0,0,.4); transform-origin: 92% 0; animation: panelIn2 .22s var(--ease); }
+@keyframes panelIn2 { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+.reader.glassBars .rPanel { background: var(--glass-hi); color: var(--ink); --rpInk: var(--ink); --rpMute: var(--mute); --rpLine: var(--line); --rpAcc: var(--ink); border-radius: 20px; -webkit-backdrop-filter: blur(22px) saturate(1.6); backdrop-filter: blur(22px) saturate(1.6); }
+.rpTitle { color: var(--rpAcc); font-weight: 700; font-size: 13px; letter-spacing: .06em; text-align: center; padding: 10px 0 4px; }
+.rPanel .rpSec { border-bottom-color: var(--rpLine); padding: 10px 0; }
+.rPanel .rpLbl { color: var(--rpMute); }
+.rPanel .rpRow b { color: var(--rpInk); }
+.rPanel .seg { background: rgba(255,255,255,.08); }
+.reader.glassBars .rPanel .seg { background: var(--line); }
+.rPanel .seg button { color: var(--rpMute); }
+.rPanel .seg button.on { background: var(--rb); color: #fff; box-shadow: none; }
+.reader.glassBars .rPanel .seg button.on { background: var(--ind); color: var(--ink); box-shadow: var(--ind-shadow); }
+.rPanel input[type=range] { accent-color: var(--rpAcc); }
+.rpStep { flex: none; min-width: 44px; height: 34px; border-radius: 8px; border: 1px solid var(--rpLine); background: rgba(255,255,255,.06); color: var(--rpInk); font-size: 13px; cursor: pointer; }
+.rpStep.big { font-size: 17px; }
+.rPanel .fontBtn { background: rgba(255,255,255,.06); border-color: var(--rpLine); color: var(--rpInk); }
+.rPanel .fontBtn small { color: var(--rpMute); }
+.rPanel .fontBtn.on { border-color: var(--rpAcc); box-shadow: inset 0 0 0 1px var(--rpAcc); }
+.reader.glassBars .rPanel .fontBtn { background: var(--glass-in); border-color: var(--line2); }
+.fontBtn .dl { font-size: 9.5px; color: var(--rpMute); }
+.rpNote { font-size: 11px; color: var(--rpMute); line-height: 1.5; }
+.rPanel .sw { color: var(--rpInk); }
+.rPanel .sw small { color: var(--rpMute); }
+.rPanel .sw.on span { box-shadow: 0 0 0 2px var(--rpBg), 0 0 0 4px var(--rpAcc); }
+.swatches.bars .sw span { border-radius: 10px; width: 40px; height: 28px; font-size: 0; }
+.rpWide { width: 100%; height: 40px; border: 1px solid var(--rpLine); border-radius: 8px; background: rgba(255,255,255,.06); color: var(--rpInk); display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.rpWide svg { width: 18px; height: 18px; }
+
+/* 目次 */
+.rToc { position: absolute; z-index: 7; left: 0; top: 0; bottom: 0; width: min(420px, 88vw); background: var(--rpBg); color: var(--rpInk); display: flex; flex-direction: column;
+  box-shadow: 6px 0 30px rgba(0,0,0,.35); animation: tocIn .22s var(--ease); padding-top: var(--safe-t); }
+@keyframes tocIn { from { transform: translateX(-24px); opacity: 0; } }
+.reader.glassBars .rToc { background: var(--glass-hi); color: var(--ink); -webkit-backdrop-filter: blur(22px) saturate(1.6); backdrop-filter: blur(22px) saturate(1.6); }
+.rTocHead { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 6px 16px; background: var(--rb); color: var(--rbInk); }
+.rTocHead b { font-size: 16px; }
+.rTocList { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 4px 0 calc(12px + var(--safe-b)); }
+.rTocList button { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: inherit; padding: 11px 16px; font-size: 14px; line-height: 1.45; cursor: pointer; border-bottom: 1px solid var(--rpLine); }
+.rTocList button.sub { padding-left: 32px; font-size: 13px; }
+.rTocList button.cur { color: var(--rpAcc); font-weight: 700; }
+.rTocList .empty { padding: 20px 16px; color: var(--rpMute); font-size: 13px; }
