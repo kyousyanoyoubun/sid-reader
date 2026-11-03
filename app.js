@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.31.4";
+const APP_VERSION = "0.32.0";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -217,16 +217,34 @@ async function checkServer() {
       try { serverInfo = await api("/api/info", { timeout: 12000 }); ok = true; } catch (e) { err = e; }
     }
     if (ok) {
-      online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; flushPending();
+      online = true; failStreak = 0; netState = { pc: "on", pcText: "つながっています" }; diagnoseOffline.at = 0; flushPending();
       if (serverInfo?.directPort) LS.set("pcDirectPort", serverInfo.directPort);
       if (!directOn && /Funnel/.test(serverInfo?.via || "") && Date.now() - directTriedAt > 60000) probeDirect().then(okd => { if (okd && currentView === "settings") renderConn(); });
     }
-    else { failStreak++; online = false; netState = { pc: "off", pcText: err?.auth ? "合言葉が違います" : "いまはつながっていません" }; }
+    else { failStreak++; online = false; netState = { pc: "off", pcText: err?.auth ? "合言葉が違います" : "いまはつながっていません", hint: netState.hint || "" }; if (!err?.auth) diagnoseOffline().catch(() => {}); }
   }
   $("setDot").classList.toggle("hidden", online || !token);
   const first = !checkedOnce; checkedOnce = true;
   if ((first || before !== online) && currentView === "library") renderLibrary(false);
   return online;
+}
+
+// v0.32: PCにつながらないとき「どこが切れているか」を見分ける（10分に1回まで）。
+// ① この端末がインターネットに出られるか（GitHubに届くか） ② PCが動いているか（PCがGitHubに2時間ごとに残す合図）
+async function diagnoseOffline() {
+  if (Date.now() - (diagnoseOffline.at || 0) < 600000) return;
+  diagnoseOffline.at = Date.now();
+  let net = false, pcAlive = null;
+  try {
+    if (gistOn()) { const f = await gistFiles(); net = true; const st = jparse(f["sid-status.json"], {}); if (st.updatedAt) pcAlive = Date.now() / 1000 - Number(st.updatedAt) < 3 * 3600; }
+    else { const ctl = new AbortController(); setTimeout(() => ctl.abort(), 6000); await fetch("https://api.github.com/zen", { cache: "no-store", signal: ctl.signal }); net = true; }
+  } catch (_) {}
+  const viaTs = /\.ts\.net/i.test(apiBase || "");
+  netState.hint = !net ? "この端末がインターネットに出られていません（Wi-Fi・機内モード・VPNを確認）"
+    : pcAlive === false ? "PCが2時間以上GitHubに合図を出していません（PCが止まっている／スリープ／helperのサービスが止まっている）"
+    : viaTs ? "この端末はインターネットに出られて、PCも動いています。切れているのは「この端末→PC」の道です。iPadなら Tailscaleアプリで「Use Tailscale DNS」をOFFにする（またはTailscaleをいったんOFF→ON）と、インターネット経由（Funnel）でつながります"
+    : "この端末はインターネットに出られています。PCのURLを確認してください";
+  if (currentView === "settings") renderConn();
 }
 
 // PCの確認: 画面を見ている間だけ。つながっている間は60秒ごと、オフのときは最初の2分は8秒ごと→その後30秒ごと。
@@ -287,8 +305,14 @@ async function gistRequests() {
 }
 let gistProgressDirty = false;
 let gistSyncing = null;
-async function gistSyncProgress() {
+// v0.32: GitHub(Gist)への書き込みを最小に。PCにつながっている間はPCがまとめてGistへ写すので、端末からは書かない。
+// PCにつながらないときだけ、読書位置・本棚・サイトの型を「1回のまとめ書き」で、5分に1回まで書く（中身が同じなら書かない）。
+const GIST_WRITE_GAP = 5 * 60 * 1000;
+const stableJson = v => JSON.stringify(v, (k, x) => (x && typeof x === "object" && !Array.isArray(x)) ? Object.keys(x).sort().reduce((o, kk) => (o[kk] = x[kk], o), {}) : x);
+const sameJson = (a, b) => { try { return stableJson(typeof a === "string" ? JSON.parse(a || "null") : a) === stableJson(typeof b === "string" ? JSON.parse(b || "null") : b); } catch (_) { return false; } };
+async function gistSyncProgress(opts = {}) {
   if (!gistOn() || !prefs.sync) return;
+  if (online && !opts.force) { ghState = { ok: true, at: Date.now(), err: "", viaPc: true }; return 0; }
   if (gistSyncing) return gistSyncing;
   gistSyncing = (async () => {
     try {
@@ -303,25 +327,25 @@ async function gistSyncProgress() {
           if (v && typeof v === "object" && (!cur || Number(v.at) > Number(cur.at))) { const rec = { key: k, ...v }; await DB.put("progress", rec).catch(() => {}); byKey.set(k, rec); pulled++; }
         }
       }
-      // v0.24: 本棚の分類（カテゴリ・シリーズ・作者）。項目ごとに新しい方を採用し、足りない分を書き戻す
+      const patch = {};
+      // 本棚の分類（カテゴリ・シリーズ・作者）。項目ごとに新しい方を採用し、こちらの方が新しい分があれば書き戻す
       await getLibMeta();
       const remoteL = jparse(files["sid-library.json"], {}) || {};
       const gotL = mergeLibEntries(remoteL);
       if (gotL) { await kvSet("libmeta", libMeta); pulled += gotL; }
-      if (Object.entries(libMeta.entries).some(([k, v]) => Number(v.t || 0) > Number(remoteL[k]?.t || 0))) {
-        await gh("PATCH", `/gists/${GH.gist}`, { files: { "sid-library.json": { content: JSON.stringify(libMeta.entries) } } });
-      }
-      // v0.24: サイトの型
+      if (Object.entries(libMeta.entries).some(([k, v]) => Number(v.t || 0) > Number(remoteL[k]?.t || 0))) patch["sid-library.json"] = { content: stableJson(libMeta.entries) };
+      // サイトの型
       const remoteS = jparse(files["sid-site-modes.json"], {}) || {};
       if (mergeSiteModes(remoteS)) kvSet("siteModes", siteModesCache);
-      if (Object.entries(siteModesCache).some(([k, v]) => Number(v.t || 0) > Number(remoteS[k]?.t || 0))) {
-        await gh("PATCH", `/gists/${GH.gist}`, { files: { "sid-site-modes.json": { content: JSON.stringify(siteModesCache) } } });
-      }
+      if (Object.entries(siteModesCache).some(([k, v]) => Number(v.t || 0) > Number(remoteS[k]?.t || 0))) patch["sid-site-modes.json"] = { content: stableJson(siteModesCache) };
+      // 自分の読書位置は「自分が読んだ分」だけ（他の端末から取り込んだ分まで書き戻すと、毎回中身が変わって書き込みが増える）
       const mine = {};
-      for (const p of byKey.values()) mine[p.key] = { page: p.page, pages: p.pages, at: p.at, title: p.title, device: p.device, ...(p.d != null ? { d: p.d, f: p.f } : {}) };
-      const text = JSON.stringify(mine);
-      if (gistProgressDirty || files[`sid-progress-${deviceId}.json`] !== text) {
-        await gh("PATCH", `/gists/${GH.gist}`, { files: { [`sid-progress-${deviceId}.json`]: { content: text } } });
+      for (const p of byKey.values()) if (!p.device || p.device === deviceName || p.dev === deviceId) mine[p.key] = { page: p.page, pages: p.pages, at: p.at, title: p.title, device: p.device, ...(p.d != null ? { d: p.d, f: p.f } : {}) };
+      if (!sameJson(files[`sid-progress-${deviceId}.json`], mine)) patch[`sid-progress-${deviceId}.json`] = { content: stableJson(mine) };
+      const lastW = Number(LS.get("gistLastWrite", 0)) || 0;
+      if (Object.keys(patch).length && (opts.force || Date.now() - lastW >= GIST_WRITE_GAP)) {
+        await gh("PATCH", `/gists/${GH.gist}`, { files: patch });
+        LS.set("gistLastWrite", Date.now());
         gistProgressDirty = false;
       }
       ghState = { ok: true, at: Date.now(), err: "" };
@@ -1931,7 +1955,7 @@ function saveProgress(pos) {
     await DB.put("progress", p).catch(() => {});
     // v0.31: PCへはページごとに送らない（本を閉じたとき・アプリが裏に回ったときにまとめて送る）
     if (prefs.sync) { progressPcDirty[key] = p; if (R.streaming && online) flushProgressPc(); }
-    if (prefs.sync && gistOn()) { gistProgressDirty = true; clearTimeout(saveProgress.gt); saveProgress.gt = setTimeout(() => gistSyncProgress().catch(() => {}), 15000); }
+    if (prefs.sync && gistOn()) { gistProgressDirty = true; clearTimeout(saveProgress.gt); saveProgress.gt = setTimeout(() => gistSyncProgress().catch(() => {}), 60000); }
   }, 700);
 }
 const progressPcDirty = {};
@@ -2332,7 +2356,7 @@ function renderConn() {
   const ul = $("connState"); ul.textContent = "";
   const row = (ok, title, note) => { const li = el("li"); const mk = el("span", "mk " + (ok === true ? "ok" : ok === false ? "ng" : ""), ok === true ? "✓" : ok === false ? "!" : ""); const t = el("div", "", title); if (note) t.append(el("small", "", note)); li.append(mk, t); ul.append(li); };
   const pcHost = baseNow() ? baseNow().replace(/^https?:\/\//, "") : location.host;
-  row(online ? true : token ? false : null, "PC（本の一覧と保存）", online ? `つながっています（${pcHost}）${serverInfo?.readerRoot ? `\n本棚: ${serverInfo.readerRoot}` : ""}` : token ? `${netState.pcText}。PC・Firefox・helperの起動と、Tailscaleを確認` : "PCの「スマホ連携」のQRコードを読むとつながります");
+  row(online ? true : token ? false : null, "PC（本の一覧と保存）", online ? `つながっています（${pcHost}）${serverInfo?.readerRoot ? `\n本棚: ${serverInfo.readerRoot}` : ""}` : token ? `${netState.pcText}。${netState.hint || "PC・Firefox・helperの起動と、Tailscaleを確認"}` : "PCの「スマホ連携」のQRコードを読むとつながります");
   if (online && serverInfo) row(true, "PCへの道", serverInfo.publicMode === "public" ? "インターネットから（このスマホにTailscaleは不要）" : "Tailscale（このスマホにもTailscaleが必要）");
   if (online && serverInfo?.via) {
     const viaFunnel = /Funnel/.test(serverInfo.via) && !directOn;
@@ -2567,7 +2591,7 @@ window.__sidBack = () => {
   if (reopen) { const idx0 = await getSaved(); if (idx0[reopen]) openBook(reopen); else LS.set("openBook", ""); }
   await checkServer();
   if (!token && !gistOn()) { showView("settings"); $("tokenMsg").textContent = isStandalone() && isIOS ? "ホーム画面のアプリは、Safariとは別に一度つなぐ必要があります（下の説明を見てください）。" : "PCの拡張機能の「スマホ連携」でQRコードを出して、このページを開き直してください。"; renderHomeApp(); }
-  if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => gistSyncProgress().catch(() => {}), 120000); }
+  if (gistOn()) { gistSyncProgress().catch(() => {}); setInterval(() => { if (!document.hidden) gistSyncProgress().catch(() => {}); }, 10 * 60000); }
   if (shared) { history.replaceState(null, "", location.pathname); openAdd(shared); }
   if (online) { await loadPcLibrary(false); if (currentView === "library") renderLibrary(false); syncAllProgress(); }
   setTimeout(() => resumePartials().catch(() => {}), 3000);
