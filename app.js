@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.35.1";
+const APP_VERSION = "0.35.2";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // v0.34: iPadは左上にウィンドウのボタンが重なるので、上のバーを少し下げる（app.css の html.ipad）
@@ -22,6 +22,8 @@ const LS = {
 };
 // v0.35: 小説の既定を ReadEra 風に（ベージュの背景＋ Noto Serif JP）。いちどだけ切り替える（あとは自由に変えられる）
 if (!LS.get("ui035", false)) { LS.set("ui035", true); LS.set("tbg", "beige"); LS.set("tfont", "x:Noto Serif JP"); }
+// v0.35.2: ReadEra と同じ Merriweather（英字）＋ Noto Serif JP（日本語）を既定に。自分でフォントを変えていなければ一度だけ切り替える
+if (!LS.get("ui0352", false)) { LS.set("ui0352", true); if (LS.get("tfont", "x:Noto Serif JP") === "x:Noto Serif JP") LS.set("tfont", "x:Merriweather"); }
 const prefs = {
   dir: LS.get("dir", "rtl"), spread: LS.get("spread", "auto"), coverSingle: LS.get("coverSingle", true), sync: LS.get("sync", true),
   // v0.31: 既定は「タップした巻を端末にキャッシュしてから読む」。PCから直接読む（ストリーム）は設定でON
@@ -1992,13 +1994,21 @@ async function loadFolderFonts(force = false) {
   } catch (_) {}
   return folderFonts;
 }
+// v0.35.2: 英字だけのフォント（Merriweather など）は、日本語の字をフォルダの日本語フォント（Noto Serif JP など）で出す
+const hasJa = ff => /\b(JP|CJK|SC|TC|KR)\b|Japan|Mincho|Gothic|明朝|ゴシック|[\u3040-\u30ff\u4e00-\u9fff]/i.test(`${ff.family} ${ff.label || ""}`);
+const jaPartner = ff => hasJa(ff) ? null : (folderFonts.find(f => f !== ff && /noto serif jp/i.test(f.family)) || folderFonts.find(f => f !== ff && hasJa(f)) || null);
+// 英字フォントに受け持たせる字（…や―などは日本語フォントに任せる。縦書きで横向きにならないように）
+const LATIN_RANGE = "U+0000-00FF,U+0100-024F,U+0259,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+1E00-1EFF,U+2018-201F,U+2032-2033,U+2039-203A,U+20AC,U+2122,U+FB01-FB02";
 const folderFontOf = key => { if (!String(key || "").startsWith("x:")) return null; const fam = key.slice(2).toLowerCase(); return folderFonts.find(f => String(f.family).toLowerCase() === fam) || null; };
 function fontOf() {
   const k = prefs.tfont;
   if (String(k).startsWith("x:")) {
     const ff = folderFontOf(k);
-    if (ff) return { name: ff.label || ff.family, stack: `"${fontCssName(ff.family)}",${SERIF}`, folder: ff };
+    if (ff) { const jp = jaPartner(ff); return { name: ff.label || ff.family, stack: `"${fontCssName(ff.family)}",${jp ? `"${fontCssName(jp.family)}",` : ""}${SERIF}`, folder: ff, partner: jp }; }
     // フォルダに無い（まだ一覧を取れていない・PCにつながらない）ときは、同じ書体のWebフォント／端末の明朝
+    // 一覧にまだ無い（初回・PCにつながらない）ときは、日本語フォントがあればそれ、無ければ端末の明朝
+    const jp = folderFonts.find(f => /noto serif jp/i.test(f.family));
+    if (jp && /merriweather/i.test(k)) return { name: jp.label || jp.family, stack: `"${fontCssName(jp.family)}",${SERIF}`, folder: jp };
     return FONTS.mincho;
   }
   return FONTS[k] || FONTS.mincho;
@@ -2031,11 +2041,12 @@ function fontFileUrl(f) {
 const fontIsCached = async f => fontUrlCache.has(fontId(f)) || !!(await DB.get("meta", fontId(f)).catch(() => null));
 function faceCss(ff, f, url) {
   const ext = (f.path.split(".").pop() || "").toLowerCase();
-  return `@font-face{font-family:"${fontCssName(ff.family)}";src:url("${url}") format("${FONT_FMT[ext] || "opentype"}");font-weight:${f.weight || 400};font-style:${f.style || "normal"};font-display:block}`;
+  return `@font-face{font-family:"${fontCssName(ff.family)}";src:url("${url}") format("${FONT_FMT[ext] || "opentype"}");font-weight:${f.weight || 400};font-style:${f.style || "normal"};font-display:block${hasJa(ff) ? "" : ";unicode-range:" + LATIN_RANGE}}`;
 }
 /** 選んだ太さに近いファイルを先に（待つ）、残りは裏で取り寄せる。返り値 = @font-face のCSS（取れた分だけ） */
 async function folderFontCss(ff, wantWeight) {
-  const files = [...(ff.files || [])].sort((a, b) => Math.abs((a.weight || 400) - wantWeight) - Math.abs((b.weight || 400) - wantWeight));
+  const dist = f => Math.abs((f.weight || 400) - wantWeight) + (f.style === "italic" ? 1000 : 0);   // 斜体は後回し
+  const files = [...(ff.files || [])].sort((a, b) => dist(a) - dist(b));
   if (!files.length) return "";
   const first = await fontFileUrl(files[0]);
   const css = [faceCss(ff, files[0], first)];
@@ -2153,9 +2164,9 @@ async function textLoad(di, where = {}) {
     if (F.folder) {
       // 初めて使うフォントはPCから取り寄せる（端末に保存。次からはすぐ）
       const want = Number(prefs.tweight) || 400;
-      const best = [...(F.folder.files || [])].sort((a, b) => Math.abs((a.weight || 400) - want) - Math.abs((b.weight || 400) - want))[0];
+      const best = [...(F.folder.files || [])].sort((a, b) => (Math.abs((a.weight || 400) - want) + (a.style === "italic" ? 1000 : 0)) - (Math.abs((b.weight || 400) - want) + (b.style === "italic" ? 1000 : 0)))[0];
       const cached = best ? await fontIsCached(best) : false;
-      const pr = folderFontCss(F.folder, want);
+      const pr = F.partner ? Promise.all([folderFontCss(F.folder, want), folderFontCss(F.partner, want).catch(() => "")]).then(a => a.join("\n")) : folderFontCss(F.folder, want);
       // v0.35.1: 端末に無くてPCにもつながらないときは待たない（端末の明朝ですぐ表示し、取れたら組み直す）
       const quick = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(cached ? 3000 : online ? 350 : 0).then(() => null)]);
       if (quick) faceCssText = quick.c;
@@ -2420,7 +2431,8 @@ function renderPanel() {
   // フォルダのフォント（PCの READER/fonts）を先に
   for (const ff of folderFonts) {
     const k = "x:" + ff.family;
-    const b = fontBtn(k, ff.label || ff.family, `"${fontCssName(ff.family)}",${SERIF}`, "あ永", "");
+    const jp = jaPartner(ff);
+    const b = fontBtn(k, ff.label || ff.family, `"${fontCssName(ff.family)}",${jp ? `"${fontCssName(jp.family)}",` : ""}${SERIF}`, jp ? "Aa永" : "あ永", jp ? `日本語は${jp.label || jp.family}` : "");
     const f0 = [...(ff.files || [])].sort((a, c) => Math.abs((a.weight || 400) - 400) - Math.abs((c.weight || 400) - 400))[0];
     const mb = (ff.files || []).reduce((t, f) => t + (f.size || 0), 0) / 1e6;
     if (f0) fontIsCached(f0).then(ok => { if (ok) folderFontCss(ff, 400).catch(() => {}); else { const d = b.querySelector(".dl"); if (d) d.textContent = `${mb >= 1 ? Math.round(mb) + "MB・" : ""}初回は取り寄せ`; } }).catch(() => {});
