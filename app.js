@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.35.0";
+const APP_VERSION = "0.35.1";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // v0.34: iPadは左上にウィンドウのボタンが重なるので、上のバーを少し下げる（app.css の html.ipad）
@@ -2153,12 +2153,16 @@ async function textLoad(di, where = {}) {
     if (F.folder) {
       // 初めて使うフォントはPCから取り寄せる（端末に保存。次からはすぐ）
       const want = Number(prefs.tweight) || 400;
+      const best = [...(F.folder.files || [])].sort((a, b) => Math.abs((a.weight || 400) - want) - Math.abs((b.weight || 400) - want))[0];
+      const cached = best ? await fontIsCached(best) : false;
       const pr = folderFontCss(F.folder, want);
-      const quick = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(350).then(() => null)]);
+      // v0.35.1: 端末に無くてPCにもつながらないときは待たない（端末の明朝ですぐ表示し、取れたら組み直す）
+      const quick = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(cached ? 3000 : online ? 350 : 0).then(() => null)]);
       if (quick) faceCssText = quick.c;
+      else if (!online && !cached) { const at = R.key; pr.then(() => { if (R.book && R.key === at && R.book.kind === "text" && !R.loading) textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); }).catch(() => {}); }
       else {
         toast("フォントを取り寄せています…", 8000);
-        const r2 = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(12000).then(() => null)]);
+        const r2 = await Promise.race([pr.then(c => ({ c })).catch(() => ({ c: "" })), sleep(8000).then(() => null)]);
         if (r2) faceCssText = r2.c;
         else { const at = R.key; pr.then(() => { if (R.book && R.key === at && R.book.kind === "text" && !R.loading) textLoad(R.di, { frac: R.pn > 1 ? R.pi / R.pn : 0 }); }).catch(() => {}); }
       }
