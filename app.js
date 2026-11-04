@@ -5,7 +5,7 @@
  * - 読んだ位置はGitHub(Gist)で端末どうし直接同期（PCがオフでも）。つながっていればPCとも同期
  */
 "use strict";
-const APP_VERSION = "0.35.3";
+const APP_VERSION = "0.35.4";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // v0.34: iPadは左上にウィンドウのボタンが重なるので、上のバーを少し下げる（app.css の html.ipad）
@@ -32,10 +32,16 @@ const prefs = {
   tbg: LS.get("tbg", "auto"), tfont: LS.get("tfont", "mincho"), tlh: LS.get("tlh", 1.85), tpad: LS.get("tpad", 1), tweight: LS.get("tweight", "400"),
   tjust: LS.get("tjust", true), toverride: LS.get("toverride", false), mbg: LS.get("mbg", "auto"),
   flow: LS.get("flow", "page"),
-  rbar: LS.get("rbar", "cyan"),   // v0.35: 読書画面のメニュー（上下のバー）の色   // v0.34: 漫画の読み方 page=めくる / scroll=縦につなげてスクロール
+  rbar: LS.get("rbar", "cyan"),
+  // v0.35.4: 文字の太さ（0〜8）。フォントの太さ（細・標準・太字）＋輪郭の太らせで9段階
+  tthick: LS.get("tthick", ({ "300": 0, "400": 2, "600": 5 })[String(LS.get("tweight", "400"))] ?? 2),
   showAdult: LS.get("showAdult", false)   // v0.29.3: 成人漫画は基本表示しない（設定で表示）
 };
-function setPref(k, v) { prefs[k] = v; LS.set(k, v); }
+function setPref(k, v) { prefs[k] = v; LS.set(k, v); if (k === "tthick") syncThick(); }
+const THICK = [[300, 0], [300, 0.15], [400, 0], [400, 0.12], [400, 0.25], [600, 0], [600, 0.2], [700, 0], [700, 0.35]];
+const THICK_NAME = ["とても細い", "細い", "標準", "少し太い", "やや太い", "太い", "かなり太い", "とても太い", "極太"];
+function syncThick() { const t = THICK[Math.max(0, Math.min(8, Number(prefs.tthick) || 0))] || THICK[2]; prefs.tweight = String(t[0]); prefs.tstroke = t[1]; }
+syncThick();
 function applyTheme() {
   if (prefs.theme === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", prefs.theme);
@@ -1971,7 +1977,7 @@ const TBG = {
 const FONTS = {
   book: { name: "本のまま", stack: "" },
   mincho: { name: "明朝", stack: SERIF, gf: "Noto+Serif+JP:wght@400;600" },
-  yumin: { name: "游明朝", stack: `"Yu Mincho","YuMincho","游明朝",${SERIF}` },
+  yumin: { name: "游明朝(端末)", stack: `"Yu Mincho","YuMincho","游明朝",${SERIF}` },
   shippori: { name: "しっぽり明朝", stack: `"Shippori Mincho",${SERIF}`, gf: "Shippori+Mincho:wght@400;600" },
   udmincho: { name: "UD明朝", stack: `"BIZ UDPMincho",${SERIF}`, gf: "BIZ+UDPMincho:wght@400;700" },
   gothic: { name: "ゴシック", stack: SANS, gf: "Noto+Sans+JP:wght@300;400;600" },
@@ -2152,7 +2158,7 @@ body{position:absolute!important;left:0!important;top:0!important;right:auto!imp
  column-width:${cw}px!important;column-gap:${2 * P}px!important;column-count:auto!important;column-fill:auto!important;column-rule:none!important;
  -webkit-column-width:${cw}px!important;-webkit-column-gap:${2 * P}px!important;
  background:transparent!important;color:inherit!important;overflow:visible!important;transform-origin:0 0!important;will-change:transform;overflow-anchor:none!important;
- ${fam ? `font-family:${fam}!important;` : ""}font-size:${prefs.font}px!important;line-height:${Number(prefs.tlh) || 1.85}!important;font-weight:${prefs.tweight || 400};word-break:normal;line-break:strict;overflow-wrap:anywhere;${prefs.tjust ? "text-align:justify;text-justify:inter-character;" : ""}}
+ ${fam ? `font-family:${fam}!important;` : ""}font-size:${prefs.font}px!important;line-height:${Number(prefs.tlh) || 1.85}!important;font-weight:${prefs.tweight || 400};${prefs.tstroke ? `-webkit-text-stroke:${prefs.tstroke}px currentColor;` : ""}word-break:normal;line-break:strict;overflow-wrap:anywhere;${prefs.tjust ? "text-align:justify;text-justify:inter-character;" : ""}}
 ${fam ? `p,div,span,li,dd,dt,blockquote,h1,h2,h3,h4,h5,h6,a,ruby,em,strong{font-family:${fam}!important}` : ""}
 ${prefs.toverride ? `body *{color:inherit!important;font-family:inherit!important;background:transparent!important;line-height:inherit!important}` : ""}
 p{line-height:inherit}
@@ -2443,7 +2449,7 @@ function renderPanel() {
   for (const ff of folderFonts) {
     const k = "x:" + ff.family;
     const ps = jaPartners(ff), latin = !hasJa(ff);
-    const b = fontBtn(k, ff.label || ff.family, `"${fontCssName(ff.family)}",${latin ? jaStack(ps) : ""}${SERIF}`, latin ? "Aa永" : "あ永", latin ? `日本語は${ps[0] && isYu(ps[0]) ? "游明朝" : "游明朝（無ければ" + (ps[0]?.label || ps[0]?.family || "明朝") + "）"}` : "");
+    const b = fontBtn(k, isYu(ff) ? "游明朝" : (ff.label || ff.family), `"${fontCssName(ff.family)}",${latin ? jaStack(ps) : ""}${SERIF}`, latin ? "Aa永" : "あ永", latin ? `日本語は${ps[0] && isYu(ps[0]) ? "游明朝" : "游明朝（無ければ" + (ps[0]?.label || ps[0]?.family || "明朝") + "）"}` : "");
     const f0 = [...(ff.files || [])].sort((a, c) => Math.abs((a.weight || 400) - 400) - Math.abs((c.weight || 400) - 400))[0];
     const mb = (ff.files || []).reduce((t, f) => t + (f.size || 0), 0) / 1e6;
     if (f0) fontIsCached(f0).then(ok => { if (ok) folderFontCss(ff, 400).catch(() => {}); else { const d = b.querySelector(".dl"); if (d) d.textContent = `${mb >= 1 ? Math.round(mb) + "MB・" : ""}初回は取り寄せ`; } }).catch(() => {});
@@ -2459,7 +2465,8 @@ function renderPanel() {
   $("rpPad").value = String(prefs.tpad); $("rpPadV").textContent = `${Math.round(prefs.tpad * 100)}%`;
   $("rpJustify").checked = !!prefs.tjust; $("rpOverride").checked = !!prefs.toverride;
   const segOn = (id, v) => $(id).querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(v)));
-  segOn("rpWm", prefs.wm); segOn("rpWeight", prefs.tweight); segOn("rpSpread", prefs.spread); segOn("rpDir", prefs.dir); segOn("rpMbg", prefs.mbg); segOn("rpTap", prefs.tap); segOn("rpFlow", prefs.flow);
+  $("rpThick").value = String(prefs.tthick); $("rpThickV").textContent = THICK_NAME[prefs.tthick] || "";
+  segOn("rpWm", prefs.wm); segOn("rpSpread", prefs.spread); segOn("rpDir", prefs.dir); segOn("rpMbg", prefs.mbg); segOn("rpTap", prefs.tap); segOn("rpFlow", prefs.flow);
 }
 let panelTimer = null;
 function applyPanel(kind = "text", delay = 0) {
@@ -2487,7 +2494,10 @@ $("rpPad").addEventListener("input", () => { setPref("tpad", Number($("rpPad").v
 $("rpJustify").addEventListener("change", () => { setPref("tjust", $("rpJustify").checked); applyPanel("text"); });
 $("rpOverride").addEventListener("change", () => { setPref("toverride", $("rpOverride").checked); applyPanel("text"); });
 const panelSeg = (id, key, kind) => $(id).addEventListener("click", e => { const b = e.target.closest("button[data-v]"); if (!b) return; setPref(key, b.dataset.v); applyPanel(kind); });
-panelSeg("rpFlow", "flow", "manga"); panelSeg("rpWm", "wm", "text"); panelSeg("rpWeight", "tweight", "text"); panelSeg("rpSpread", "spread", "manga"); panelSeg("rpDir", "dir", "manga"); panelSeg("rpMbg", "mbg", "mangaBg"); panelSeg("rpTap", "tap", "none");
+panelSeg("rpFlow", "flow", "manga"); panelSeg("rpWm", "wm", "text");
+$("rpThick").addEventListener("input", () => { setPref("tthick", Number($("rpThick").value)); applyPanel("text", 260); });
+const thickStep = d => { setPref("tthick", Math.max(0, Math.min(8, prefs.tthick + d))); applyPanel("text", 200); };
+$("rpThickDn").addEventListener("click", () => thickStep(-1)); $("rpThickUp").addEventListener("click", () => thickStep(1)); panelSeg("rpSpread", "spread", "manga"); panelSeg("rpDir", "dir", "manga"); panelSeg("rpMbg", "mbg", "mangaBg"); panelSeg("rpTap", "tap", "none");
 
 // 操作: タップ（既定: 左で次へ／中央でメニュー）、スワイプ、キー、ホイール
 (function bindReader() {
