@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
-  <link rel="stylesheet" href="app.css?v=0.35.3">
+  <link rel="stylesheet" href="app.css?v=0.35.4">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -320,6 +320,10 @@
         <div class="rpSlide"><button id="rpSizeDn" class="rpStep" type="button" aria-label="小さく">A−</button><input id="rpSize" type="range" min="12" max="40" step="1"><button id="rpSizeUp" class="rpStep big" type="button" aria-label="大きく">A＋</button></div>
       </div>
       <div class="rpSec textOnly">
+        <div class="rpRow"><span class="rpLbl">文字の太さ</span><b id="rpThickV"></b></div>
+        <div class="rpSlide"><button id="rpThickDn" class="rpStep" type="button" aria-label="細く">細</button><input id="rpThick" type="range" min="0" max="8" step="1"><button id="rpThickUp" class="rpStep big" type="button" aria-label="太く"><b>太</b></button></div>
+      </div>
+      <div class="rpSec textOnly">
         <div class="rpLbl">フォント</div>
         <div class="fontList" id="rpFont"></div>
         <div class="rpNote" id="rpFontNote"></div>
@@ -341,7 +345,6 @@
         <input id="rpPad" type="range" min="0.3" max="2.4" step="0.1">
       </div>
       <div class="rpSec textOnly">
-        <div class="rpRow"><span class="rpLbl">文字の太さ</span><div class="seg" id="rpWeight"><button data-v="300" type="button">細</button><button data-v="400" type="button">標準</button><button data-v="600" type="button">太</button></div></div>
         <label class="rpRow"><span class="rpLbl">両端そろえ</span><input id="rpJustify" type="checkbox" class="toggle"></label>
         <label class="rpRow"><span class="rpLbl">本のフォント・色を使わない</span><input id="rpOverride" type="checkbox" class="toggle"></label>
       </div>
@@ -380,6 +383,6 @@
     </div>
   </div>
   <div id="toast" class="toast glass hidden" role="status" aria-live="polite"></div>
-  <script src="app.js?v=0.35.3"></script>
+  <script src="app.js?v=0.35.4"></script>
 </body>
 </html>
