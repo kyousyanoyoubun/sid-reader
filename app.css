@@ -54,7 +54,7 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { background: var(--bg2); }
+html { background: var(--bg2); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overflow-x: hidden; overflow-x: clip; } /* v0.35.1: 横にはみ出して画面が大きくならないように */
 body {
   margin: 0; min-height: 100vh; color: var(--ink); background: var(--bg2);
   font: 14px/1.6 var(--font); font-feature-settings: "palt" 1;
@@ -101,13 +101,14 @@ svg { width: 20px; height: 20px; flex: none; }
 }
 .topbar.scrolled::before { opacity: .92; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; letter-spacing: .02em; min-width: 0; }
-.brand .mark { width: 30px; height: 28px; color: var(--ink); }
+.brand .mark { width: 44px; height: 20px; color: var(--ink); flex: none; }   /* v0.35.1: ロゴは「SID」 */
 .search {
   margin-left: auto; display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px;
   border-radius: 999px; width: min(320px, 46vw); box-shadow: var(--shadow-s), inset 0 1px 0 var(--glass-in);
 }
 .search svg { width: 16px; height: 16px; color: var(--mute); }
-.search input { border: 0; outline: 0; background: transparent; width: 100%; min-width: 0; font-size: 13.5px; }
+.search input { border: 0; outline: 0; background: transparent; flex: 1 1 0; width: 0; min-width: 0; font-size: 13.5px; padding: 0; margin: 0; -webkit-appearance: none; appearance: none; }
+.search { min-width: 0; overflow: hidden; } /* v0.35.1: 入力欄が枠の外へはみ出し、スマホで本棚だけ縮小表示→「続き」で大きく見える原因だった */
 .search input::-webkit-search-cancel-button { filter: grayscale(1); }
 
 main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
@@ -167,7 +168,10 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 
 /* ---------- 続き・保存済み ---------- */
 .contList { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.contItem { all: unset; cursor: pointer; display: grid; grid-template-columns: 62px 1fr; gap: 12px; align-items: center; padding: 10px; border-radius: var(--r); }
+.contItem { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px; border-radius: var(--r); min-width: 0; max-width: 100%; }
+.contItem > div { min-width: 0; }
+.contList { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); }
+.savedRow { grid-template-columns: 38px minmax(0, 1fr) auto; }
 .contItem .cv { border-radius: 8px; }
 .contItem .t { font-weight: 700; font-size: 13.5px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .contItem .s { font-size: 11.5px; color: var(--mute); margin: 2px 0 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -251,7 +255,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 .dock.hide { transform: translateY(140%); opacity: 0; }
 .pill {
   position: relative; display: flex; align-items: center; height: 64px; padding: 6px; border-radius: 999px;
-  transition: transform .45s var(--spring), opacity .25s var(--ease), filter .3s;
+  transition: transform .45s var(--spring), opacity .25s var(--ease);
   transform-origin: 70% 100%;
 }
 .tab {
@@ -278,14 +282,14 @@ main { max-width: 1120px; margin: 0 auto; padding: 4px 16px 0; }
 .plus::after { transform: translate(-50%, -50%) rotate(90deg); }
 .dock.open .plus { transform: rotate(135deg); }
 .dock.open .fab { background: var(--glass-hi); }
-.dock.open .pill { transform: scale(.82) translateY(10px); opacity: 0; filter: blur(6px); pointer-events: none; }
+.dock.open .pill { transform: scale(.82) translateY(10px); opacity: 0; pointer-events: none; }
 .fabMenu {
   position: absolute; right: calc(100% + 14px); bottom: 0; width: min(330px, calc(100vw - 112px));
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px; border-radius: 26px;
-  transform-origin: 100% 100%; transform: scale(.35) translate(30%, 10%); opacity: 0; pointer-events: none; filter: blur(8px);
-  transition: transform .5s var(--spring), opacity .25s var(--ease), filter .35s var(--ease);
+  transform-origin: 100% 100%; transform: scale(.35) translate(30%, 10%); opacity: 0; pointer-events: none;
+  transition: transform .5s var(--spring), opacity .25s var(--ease);
 }
-.dock.open .fabMenu { transform: none; opacity: 1; pointer-events: auto; filter: none; }
+.dock.open .fabMenu { transform: none; opacity: 1; pointer-events: auto; }
 .fabMenu button {
   border: 0; border-radius: 17px; background: var(--tile); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   height: 76px; cursor: pointer; font-size: 11.5px; color: var(--ink); box-shadow: inset 0 1px 0 var(--glass-in);
